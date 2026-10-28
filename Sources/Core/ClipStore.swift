@@ -5,15 +5,18 @@ final class ClipStore: ObservableObject {
     @Published var items: [ClipItem] = []
     private let fileURL: URL
     private let legacyURL: URL  // unencrypted history from earlier versions
-    private let key = HistoryKey.load()
+    private let key: SymmetricKey?
     private let saveQueue = DispatchQueue(label: "ClipboardHistory.save")
 
-    init() {
+    // Not persistent: starts empty and never touches the disk or the keychain (for --snapshots)
+    init(persistent: Bool = true) {
+        key = persistent ? HistoryKey.load() : nil
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ClipboardHistory", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("history.sealed")
         legacyURL = dir.appendingPathComponent("history.plist")
+        guard persistent else { return }
         if let key, let sealed = try? Data(contentsOf: fileURL),
            let data = try? AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key),
            let saved = try? PropertyListDecoder().decode([ClipItem].self, from: data) {

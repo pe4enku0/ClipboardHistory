@@ -88,7 +88,7 @@ enum Snapshots {
 
     // Never saved: items are only assigned in memory
     private static func sampleStore() -> ClipStore {
-        let store = ClipStore()
+        let store = ClipStore(persistent: false)
         func item(_ kind: ClipItem.Kind, _ text: String, minutesAgo: Double, app: String?, pinned: Bool = false,
                   paths: [String]? = nil, thumbnail: Data? = nil, origin: ClipItem.Origin? = nil,
                   ocr: String? = nil, size: (Int, Int)? = nil) -> ClipItem {

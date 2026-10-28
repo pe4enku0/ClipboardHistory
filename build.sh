@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Builds ClipboardHistory.app and installs it into ~/Applications
+# Builds ClipboardHistory.app (Apple Silicon + Intel) and installs it into ~/Applications.
+# `./build.sh --no-install` only builds it into build/
 set -e
 cd "$(dirname "$0")"
 
@@ -7,8 +8,12 @@ APP="build/ClipboardHistory.app"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -swift-version 5 -target arm64-apple-macosx14.0 $(find Sources -name '*.swift') \
-    -o "$APP/Contents/MacOS/ClipboardHistory"
+for arch in arm64 x86_64; do
+    swiftc -O -swift-version 5 -target $arch-apple-macosx14.0 $(find Sources -name '*.swift') \
+        -o "build/ClipboardHistory-$arch"
+done
+lipo -create build/ClipboardHistory-arm64 build/ClipboardHistory-x86_64 -output "$APP/Contents/MacOS/ClipboardHistory"
+rm build/ClipboardHistory-arm64 build/ClipboardHistory-x86_64
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -32,6 +37,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --sign - "$APP"
+if [[ "$1" == "--no-install" ]]; then
+    echo "Built: $APP"
+    exit 0
+fi
 
 pkill -x ClipboardHistory || true
 mkdir -p ~/Applications
