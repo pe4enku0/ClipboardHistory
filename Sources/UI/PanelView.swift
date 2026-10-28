@@ -55,18 +55,7 @@ final class PanelState: ObservableObject {
 struct PanelActions {
     let paste: (ClipItem, Bool) -> Void  // item, as plain text
     let insert: (String) -> Void
-}
-
-struct VisualEffect: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .popover
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+    let openSettings: () -> Void
 }
 
 // MARK: - Panel
@@ -74,24 +63,38 @@ struct VisualEffect: NSViewRepresentable {
 struct PanelView: View {
     @ObservedObject var store: ClipStore
     @ObservedObject var state: PanelState
+    @ObservedObject var prefs: Preferences
     let actions: PanelActions
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 2) {
-                ForEach(PanelTab.allCases, id: \.self) { tab in
-                    Button { state.tab = tab } label: {
-                        TabIcon(tab: tab)
-                            .frame(width: 44, height: 28)
-                            .background(RoundedRectangle(cornerRadius: 6)
-                                .fill(state.tab == tab ? Color.primary.opacity(0.12) : Color.clear))
-                            .contentShape(Rectangle())
+            HStack(spacing: 8) {
+                HStack(spacing: 2) {
+                    ForEach(PanelTab.allCases, id: \.self) { tab in
+                        let selected = state.tab == tab
+                        Button { state.tab = tab } label: {
+                            TabIcon(tab: tab)
+                                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                                .frame(width: 40, height: 26)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(selected ? Color(nsColor: .controlBackgroundColor) : Color.clear)
+                                        .shadow(color: .black.opacity(selected ? 0.15 : 0), radius: 1, y: 0.5)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(tab.title)
                     }
-                    .buttonStyle(.plain)
-                    .help(tab.title)
                 }
+                .padding(2)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.07)))
+
                 Spacer()
+                Button(action: actions.openSettings) { Image(systemName: "gearshape") }
+                    .buttonStyle(.borderless)
+                    .help("Настройки")
             }
             .padding(.horizontal, 10)
             .padding(.top, 10)
@@ -108,6 +111,22 @@ struct PanelView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
+
+            if prefs.paused && state.tab == .clipboard {
+                HStack(spacing: 6) {
+                    Image(systemName: "pause.circle.fill")
+                    Text("Запись на паузе")
+                    Spacer()
+                    Button("Возобновить") { prefs.paused = false }
+                        .buttonStyle(.borderless)
+                }
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.18)))
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+            }
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -136,7 +155,7 @@ struct PanelView: View {
                 .foregroundStyle(.secondary)
                 .padding(8)
         }
-        .frame(width: 380, height: 480)
+        .frame(width: 380, height: 500)
         .background(VisualEffect())
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.12)))
@@ -152,7 +171,7 @@ struct TabIcon: View {
         case .clipboard: Image(systemName: "list.clipboard")
         case .emoji: Image(systemName: "face.smiling")
         case .kaomoji: Text(";-)").font(.system(size: 12, weight: .semibold))
-        case .symbols: Image(systemName: "omega")
+        case .symbols: Text("Ω").font(.system(size: 15, weight: .medium))
         }
     }
 }
@@ -179,7 +198,7 @@ struct ClipboardList: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: 6) {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                             ClipRow(item: item, index: index, selected: index == state.selection,
                                     hovering: state.hoveredID == item.id,
@@ -226,63 +245,95 @@ struct ClipRow: View {
     let onDelete: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            preview.frame(maxWidth: .infinity, alignment: .leading)
-
-            VStack(alignment: .trailing, spacing: 4) {
-                HStack(spacing: 4) {
-                    if hovering || item.pinned {
-                        Button(action: onPin) {
-                            Image(systemName: item.pinned ? "pin.fill" : "pin")
-                        }
-                        .help(item.pinned ? "Открепить" : "Закрепить")
-                    }
-                    if hovering {
-                        Button(action: onDelete) { Image(systemName: "xmark") }
-                            .help("Удалить")
-                    }
+        let badge = item.badge
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: badge.symbol)
+                Text(badge.title)
+                Text("·")
+                Text(TimeLabel.string(for: item.date))
+                if let id = item.sourceBundleID, let icon = AppIcons.icon(bundleID: id) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 13, height: 13)
+                        .help(item.sourceAppName ?? "")
                 }
-                .buttonStyle(.borderless)
-                .font(.caption)
-
-                if index < 9 {
-                    Text("⌘\(index + 1)").font(.caption2).foregroundStyle(.tertiary)
+                Spacer(minLength: 4)
+                if hovering {
+                    Button(action: onPin) { Image(systemName: item.pinned ? "pin.slash" : "pin") }
+                        .help(item.pinned ? "Открепить" : "Закрепить")
+                    Button(action: onDelete) { Image(systemName: "trash") }
+                        .help("Удалить")
+                } else {
+                    if item.pinned {
+                        Image(systemName: "pin.fill").foregroundStyle(Color.accentColor)
+                    }
+                    if index < 9 {
+                        Text("⌘\(index + 1)").foregroundStyle(.tertiary)
+                    }
                 }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .buttonStyle(.borderless)
+
+            preview(badge)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(selected ? Color.accentColor.opacity(0.28) : Color.primary.opacity(hovering ? 0.09 : 0.045))
+                .fill(selected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(hovering ? 0.09 : 0.045))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(selected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder private var preview: some View {
-        switch item.kind {
+    private var trimmed: String { item.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    @ViewBuilder private func preview(_ badge: ContentBadge) -> some View {
+        switch badge {
         case .image:
             if let data = item.thumbnail, let image = NSImage(data: data) {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
-                    .frame(maxHeight: 100)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .frame(maxWidth: 220, maxHeight: 100, alignment: .leading)
             } else {
                 Text("Изображение").foregroundStyle(.secondary)
             }
-        case .files:
+        case .file:
             HStack(spacing: 8) {
                 if let path = item.paths?.first {
                     Image(nsImage: NSWorkspace.shared.icon(forFile: path))
                         .resizable()
                         .frame(width: 28, height: 28)
                 }
-                Text(item.text).font(.system(size: 12.5)).lineLimit(3)
+                Text(item.text).font(.system(size: 13)).lineLimit(3)
             }
+        case .color(let color):
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color(nsColor: color))
+                    .frame(width: 28, height: 28)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.15)))
+                Text(trimmed).font(.system(size: 13, design: .monospaced))
+            }
+        case .link:
+            Text(trimmed)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.accentColor)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        case .code:
+            Text(trimmed).font(.system(size: 11.5, design: .monospaced)).lineLimit(5)
         case .text:
-            Text(item.text.trimmingCharacters(in: .whitespacesAndNewlines))
-                .font(.system(size: 12.5))
-                .lineLimit(4)
+            Text(trimmed).font(.system(size: 13)).lineLimit(4)
         }
     }
 }

@@ -5,9 +5,11 @@ cd "$(dirname "$0")"
 
 APP="build/ClipboardHistory.app"
 rm -rf build
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -swift-version 5 -target arm64-apple-macosx14.0 *.swift -o "$APP/Contents/MacOS/ClipboardHistory"
+swiftc -O -swift-version 5 -target arm64-apple-macosx14.0 $(find Sources -name '*.swift') \
+    -o "$APP/Contents/MacOS/ClipboardHistory"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -18,6 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>ClipboardHistory</string>
     <key>CFBundleDisplayName</key><string>История буфера</string>
     <key>CFBundleExecutable</key><string>ClipboardHistory</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>NSHumanReadableCopyright</key><string>© 2026</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>

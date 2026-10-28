@@ -1,110 +1,56 @@
 import AppKit
-import SwiftUI
 import Carbon.HIToolbox
-import ServiceManagement
-
-// MARK: - Global hotkey (Carbon API needs no extra permissions)
-
-final class HotKey {
-    private var ref: EventHotKeyRef?
-    private static var action: (() -> Void)?
-
-    init(keyCode: Int, modifiers: Int, action: @escaping () -> Void) {
-        HotKey.action = action
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-            DispatchQueue.main.async { HotKey.action?() }
-            return noErr
-        }, 1, &spec, nil, nil)
-        let id = EventHotKeyID(signature: OSType(0x434C_4950), id: 1) // 'CLIP'
-        RegisterEventHotKey(UInt32(keyCode), UInt32(modifiers), id, GetApplicationEventTarget(), 0, &ref)
-    }
-}
-
-final class KeyPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-}
-
-// MARK: - Sending keystrokes to the frontmost app (needs Accessibility)
-
-enum Keystrokes {
-    static func commandV() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true)
-        let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false)
-        down?.flags = .maskCommand
-        up?.flags = .maskCommand
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
-    }
-
-    // Types text directly, so emoji and symbols don't end up in the clipboard history
-    static func type(_ text: String) {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let utf16 = Array(text.utf16)
-        var start = 0
-        while start < utf16.count {
-            var end = min(start + 16, utf16.count)
-            if end < utf16.count, UTF16.isLeadSurrogate(utf16[end - 1]) { end -= 1 }
-            let chunk = Array(utf16[start..<end])
-            for keyDown in [true, false] {
-                let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown)
-                event?.flags = []
-                event?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-                event?.post(tap: .cghidEventTap)
-            }
-            start = end
-        }
-    }
-
-    // Text caret position of the focused field, in Cocoa screen coordinates
-    static func caretRect() -> NSRect? {
-        guard AXIsProcessTrusted() else { return nil }
-        let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.2)
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let focused else { return nil }
-        let element = focused as! AXUIElement
-        var range: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &range) == .success,
-              let range else { return nil }
-        var bounds: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
-                                                         range, &bounds) == .success,
-              let bounds else { return nil }
-        var rect = CGRect.zero
-        guard AXValueGetValue(bounds as! AXValue, .cgRect, &rect), rect.height > 0 else { return nil }
-        // AX uses a top-left origin on the primary screen
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let flipped = NSRect(x: rect.minX, y: primaryHeight - rect.maxY, width: rect.width, height: rect.height)
-        return NSScreen.screens.contains { $0.frame.intersects(flipped) } ? flipped : nil
-    }
-}
-
-// MARK: - App
+import Combine
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+    let prefs = Preferences.shared
+    let permissions = PermissionState.shared
     let store = ClipStore()
     let state = PanelState()
     lazy var monitor = ClipboardMonitor(store: store)
+    let hotKey = HotKey()
     var statusItem: NSStatusItem!
     var panel: KeyPanel!
-    var hotKey: HotKey?
     var keyMonitor: Any?
+    var settingsWindow: NSWindow?
+    var onboardingWindow: NSWindow?
+    var limitsTimer: Timer?
+    var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        store.applyLimits()
         monitor.start()
         setupMainMenu()
         setupStatusItem()
         setupPanel()
-        hotKey = HotKey(keyCode: kVK_ANSI_V, modifiers: optionKey) { [weak self] in self?.togglePanel() }
-        // Auto-paste needs Accessibility; without it items are just copied
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        hotKey.action = { [weak self] in self?.togglePanel() }
+        hotKey.register(prefs.hotKey)
+        observePreferences()
+        limitsTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.store.applyLimits()
+        }
+        if !prefs.onboardingDone { showOnboarding() }
     }
 
-    // Hidden Edit menu so ⌘C/⌘V/⌘A work in the search field
+    // @Published fires before the value is stored, so read the new value from the closure argument
+    func observePreferences() {
+        prefs.$hotKey.dropFirst().sink { [weak self] in self?.hotKey.register($0) }.store(in: &cancellables)
+        prefs.$isRecordingShortcut.dropFirst().sink { [weak self] recording in
+            guard let self else { return }
+            if recording { self.hotKey.unregister() } else { self.hotKey.register(self.prefs.hotKey) }
+        }.store(in: &cancellables)
+        prefs.$paused.sink { [weak self] paused in
+            self?.statusItem.button?.image = MenuBarIcon.image(paused: paused)
+            self?.statusItem.button?.toolTip = paused ? "История буфера — запись на паузе" : "История буфера"
+        }.store(in: &cancellables)
+        Publishers.Merge(prefs.$historyLimit.dropFirst().map { _ in () }, prefs.$retentionDays.dropFirst().map { _ in () })
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.store.applyLimits() }
+            .store(in: &cancellables)
+    }
+
+    // Hidden Edit menu so ⌘C/⌘V/⌘A work in text fields
     func setupMainMenu() {
         let main = NSMenu()
         let editItem = NSMenuItem()
@@ -115,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         editItem.submenu = edit
         NSApp.mainMenu = main
     }
@@ -123,7 +70,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "История буфера")
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -137,46 +83,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             menu.addItem(item)
             return item
         }
-        _ = add("Показать историю  ⌥V", #selector(showFromMenu))
+        let open = add("Открыть историю", #selector(showFromMenu))
+        if let key = prefs.hotKey.menuKeyEquivalent {
+            open.keyEquivalent = key
+            open.keyEquivalentModifierMask = prefs.hotKey.cocoaModifiers
+        }
+        add("Пауза записи", #selector(togglePause)).state = prefs.paused ? .on : .off
         _ = add("Очистить историю", #selector(clearHistory))
         menu.addItem(.separator())
-        add("Запускать при входе", #selector(toggleLogin)).state =
-            SMAppService.mainApp.status == .enabled ? .on : .off
-        if !AXIsProcessTrusted() {
-            _ = add("Разрешить автовставку…", #selector(openAccessibility))
+        if !permissions.accessibility {
+            _ = add("Разрешить автовставку…", #selector(requestAccessibility))
         }
+        _ = add("Настройки…", #selector(showSettings), key: ",")
+        _ = add("О программе", #selector(showAbout))
         menu.addItem(.separator())
         _ = add("Выход", #selector(quit), key: "q")
     }
 
     @objc func showFromMenu() { DispatchQueue.main.async { self.showPanel() } }
+    @objc func togglePause() { prefs.paused.toggle() }
     @objc func clearHistory() { store.clearUnpinned() }
+    @objc func requestAccessibility() { permissions.request() }
     @objc func quit() { NSApp.terminate(nil) }
 
-    @objc func openAccessibility() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    @objc func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "История буфера",
+            .credits: NSAttributedString(string: "Как Win+V в Windows, только для Mac"),
+        ])
     }
 
-    @objc func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Не удалось изменить автозапуск"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
+    // MARK: Windows
+
+    @objc func showSettings() {
+        hidePanel()
+        if settingsWindow == nil {
+            settingsWindow = SettingsWindow.make(prefs: prefs, store: store, permissions: permissions)
         }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func showOnboarding() {
+        let view = OnboardingView(model: OnboardingModel(), prefs: prefs, permissions: permissions) { [weak self] in
+            self?.prefs.onboardingDone = true
+            self?.onboardingWindow?.close()
+            self?.onboardingWindow = nil
+        }
+        let window = NSWindow(contentViewController: NSHostingController(rootView: view))
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.center()
+        onboardingWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     // MARK: Panel
 
     func setupPanel() {
         // Non-activating panel: the app you were typing in stays active, so ⌘V lands there
-        panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 480),
+        panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 500),
                          styleMask: [.nonactivatingPanel, .borderless],
                          backing: .buffered, defer: true)
         panel.isOpaque = false
@@ -196,19 +167,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         state.tab = .clipboard
         state.selection = 0
         let actions = PanelActions(paste: { [weak self] in self?.paste($0, plainText: $1) },
-                                   insert: { [weak self] in self?.insert($0) })
-        panel.contentView = NSHostingView(rootView: PanelView(store: store, state: state, actions: actions))
-
-        // Like Windows: open under the text caret, or at the mouse if the app doesn't expose it
-        let anchor = Keystrokes.caretRect() ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
-        let screen = NSScreen.screens.first { $0.frame.contains(anchor.origin) } ?? NSScreen.main!
-        let size = panel.frame.size
-        let visible = screen.visibleFrame
-        var origin = NSPoint(x: anchor.minX - 16, y: anchor.minY - size.height - 6)
-        if origin.y < visible.minY + 8 { origin.y = anchor.maxY + 6 }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
-        panel.setFrameOrigin(origin)
+                                   insert: { [weak self] in self?.insert($0) },
+                                   openSettings: { [weak self] in self?.showSettings() })
+        panel.contentView = NSHostingView(rootView: PanelView(store: store, state: state, prefs: prefs, actions: actions))
+        panel.setFrameOrigin(panelOrigin(size: panel.frame.size))
         panel.makeKeyAndOrderFront(nil)
         panel.invalidateShadow()
 
@@ -220,13 +182,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
 
+    func panelOrigin(size: NSSize) -> NSPoint {
+        let mouse = NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        let anchor: NSRect
+        switch prefs.panelPosition {
+        // Like Windows: under the text caret, or at the mouse if the app doesn't expose it
+        case .caret: anchor = Keystrokes.caretRect() ?? mouse
+        case .mouse, .center: anchor = mouse
+        }
+        let screen = NSScreen.screens.first { $0.frame.contains(anchor.origin) } ?? NSScreen.main!
+        let visible = screen.visibleFrame
+        var origin: NSPoint
+        if prefs.panelPosition == .center {
+            origin = NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2 + 60)
+        } else {
+            origin = NSPoint(x: anchor.minX - 16, y: anchor.minY - size.height - 6)
+            if origin.y < visible.minY + 8 { origin.y = anchor.maxY + 6 }
+        }
+        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        return origin
+    }
+
     func hidePanel() {
         panel.orderOut(nil)
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
     }
 
-    func windowDidResignKey(_ notification: Notification) { hidePanel() }
+    func windowDidResignKey(_ notification: Notification) {
+        if (notification.object as? NSWindow) === panel { hidePanel() }
+    }
 
     // MARK: Keyboard
 
@@ -243,6 +229,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case kVK_Tab:
             let tabs = PanelTab.allCases
             state.tab = tabs[(state.tab.rawValue + (shift ? tabs.count - 1 : 1)) % tabs.count]
+            return true
+        case kVK_ANSI_Comma where event.modifierFlags.contains(.command):
+            showSettings()
             return true
         default:
             break
@@ -321,7 +310,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 }
 
 let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+if let flag = CommandLine.arguments.firstIndex(of: "--snapshots"), CommandLine.arguments.count > flag + 1 {
+    Snapshots.run(into: URL(fileURLWithPath: CommandLine.arguments[flag + 1]))
+    exit(0)
+}
 let delegate = AppDelegate()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)
 app.run()
