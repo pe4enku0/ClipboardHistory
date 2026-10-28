@@ -45,14 +45,29 @@ final class AutoClipboard {
         } else {
             return
         }
-        guard let item = ClipItem(file: file, origin: origin) else { return }
-        item.write(to: NSPasteboard.general, plainText: false)
+        // Clipboard first, so ⌘V works immediately; the history entry (thumbnail, size) is built in the background
+        Self.writeToPasteboard(file)
         monitor.markOwnChange()
-        store.add(item)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let item = ClipItem(file: file, origin: origin) else { return }
+            DispatchQueue.main.async { self?.store.add(item) }
+        }
+    }
+
+    private static func writeToPasteboard(_ file: URL) {
+        let item = NSPasteboardItem()
+        item.setString(file.absoluteString, forType: .fileURL)
+        if file.pathExtension.lowercased() == "png", let data = try? Data(contentsOf: file) {
+            item.setData(data, forType: .png)
+        } else if ClipItem.isImageFile(file), let tiff = NSImage(contentsOf: file)?.tiffRepresentation {
+            item.setData(tiff, forType: .tiff)
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([item])
     }
 
     // The screencapture tool tags its files with this attribute, whatever their name or language
-    private static func isScreenCapture(_ url: URL) -> Bool {
+    static func isScreenCapture(_ url: URL) -> Bool {
         getxattr(url.path, "com.apple.metadata:kMDItemIsScreenCapture", nil, 0, 0, 0) >= 0
     }
 
@@ -93,7 +108,7 @@ final class DirectoryWatcher {
         let options = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes
                                                | kFSEventStreamCreateFlagNoDefer)
         guard let stream = FSEventStreamCreate(nil, callback, &context, [self.url.path] as CFArray,
-                                               FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, options) else {
+                                               FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0, options) else {
             return nil
         }
         self.stream = stream
@@ -119,7 +134,12 @@ final class DirectoryWatcher {
               !Self.partialExtensions.contains(file.pathExtension.lowercased()),
               FileManager.default.fileExists(atPath: path), !seen.contains(path) else { return }
         seen.insert(path)
-        waitUntilWritten(file, lastSize: -1, attempts: 600)
+        // screencapture moves a finished file into place, so screenshots need no waiting
+        if AutoClipboard.isScreenCapture(file) {
+            onNewFile(file)
+        } else {
+            waitUntilWritten(file, lastSize: -1, attempts: 600)
+        }
     }
 
     private func waitUntilWritten(_ file: URL, lastSize: Int, attempts: Int) {
