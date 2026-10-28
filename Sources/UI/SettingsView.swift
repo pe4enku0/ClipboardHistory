@@ -121,6 +121,12 @@ struct AutoClipboardSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                Picker(selection: $prefs.editor) {
+                    ForEach(EditorChoice.allCases) { Text($0.title).tag($0) }
+                } label: {
+                    settingLabel(tr("Редактор картинок", "Image editor"), "pencil.tip.crop.circle", .purple,
+                                 tr("Что открывает кнопка «Изменить»", "What the Edit button opens"))
+                }
                 Toggle(isOn: $prefs.recognizeText) {
                     settingLabel(tr("Распознавать текст на картинках", "Recognize text in images"), "text.viewfinder", .blue,
                                  tr("Поиск по тексту и вставка текстом. Работает без интернета.",

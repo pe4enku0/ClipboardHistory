@@ -32,9 +32,26 @@ final class ScreenshotFeedback {
     private func flash(_ rect: NSRect?) {
         let mouseScreen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         guard let frame = rect ?? mouseScreen?.frame else { return }
-        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        // A soft glowing outline around the captured area instead of a full white flash
+        let glow: CGFloat = 14
+        let window = NSWindow(contentRect: frame.insetBy(dx: -glow, dy: -glow), styleMask: .borderless,
+                              backing: .buffered, defer: false)
         window.isOpaque = false
-        window.backgroundColor = NSColor.white.withAlphaComponent(0.7)
+        window.backgroundColor = .clear
+        let view = NSView(frame: NSRect(origin: .zero, size: window.frame.size))
+        view.wantsLayer = true
+        let outline = CALayer()
+        outline.frame = view.bounds.insetBy(dx: glow, dy: glow)
+        outline.cornerRadius = rect == nil ? 0 : 4
+        outline.borderWidth = 2
+        outline.borderColor = NSColor.white.withAlphaComponent(0.95).cgColor
+        outline.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        outline.shadowColor = NSColor.white.cgColor
+        outline.shadowOpacity = 1
+        outline.shadowRadius = 7
+        outline.shadowOffset = .zero
+        view.layer?.addSublayer(outline)
+        window.contentView = view
         window.level = .screenSaver
         window.ignoresMouseEvents = true
         window.hasShadow = false
@@ -43,8 +60,8 @@ final class ScreenshotFeedback {
         window.orderFrontRegardless()
         flashWindows.append(window)
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.45
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.duration = 0.6
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             window.orderOut(nil)

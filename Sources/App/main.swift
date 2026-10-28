@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     lazy var autoClipboard = AutoClipboard(store: store, monitor: monitor)
     let hotKey = HotKey()
     let feedback = ScreenshotFeedback()
+    let markup = SystemMarkup()
     var editorWindow: NSWindow?
     // Where to paste when our own app had to be activated (e.g. opened from Finder)
     var previousApp: NSRunningApplication?
@@ -375,25 +376,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func openEditor(data: Data?, sourceURL: URL?) {
-        guard let data, let model = EditorModel(data: data, sourceURL: sourceURL) else {
+        guard let data else {
             NSSound.beep()
             return
         }
         hidePanel()
+        if prefs.editor == .system, openSystemMarkup(data: data, sourceURL: sourceURL) { return }
+        guard let model = EditorModel(data: data, sourceURL: sourceURL) else {
+            NSSound.beep()
+            return
+        }
         editorWindow?.close()
         let window = ScreenshotEditor.makeWindow(model: model) { [weak self] png in
-            // Not marked as our own change, so the edited picture also lands in the history
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setData(png, forType: .png)
-            if let tiff = NSImage(data: png)?.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
             self?.editorWindow?.close()
             self?.editorWindow = nil
-            NSApp.hide(nil)  // back to the app you were in, ready for ⌘V
+            self?.copyEditedImage(png)
         }
         editorWindow = window
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func openSystemMarkup(data: Data, sourceURL: URL?) -> Bool {
+        // Screenshots are edited in place, as macOS does; anything else on a temporary copy
+        let isScreenshot = sourceURL.map { FileManager.default.fileExists(atPath: $0.path) && AutoClipboard.isScreenCapture($0) } ?? false
+        guard let file = isScreenshot ? sourceURL : SystemMarkup.temporaryFile(for: data) else { return false }
+        return markup.open(file) { [weak self] edited in
+            let png = NSBitmapImageRep(data: edited)?.representation(using: .png, properties: [:]) ?? edited
+            if isScreenshot, png != (try? Data(contentsOf: file)) { try? png.write(to: file) }
+            self?.copyEditedImage(png)
+        }
+    }
+
+    // Not marked as our own change, so the edited picture also lands in the history
+    private func copyEditedImage(_ png: Data) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setData(png, forType: .png)
+        if let tiff = NSImage(data: png)?.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
+        NSApp.hide(nil)  // back to the app you were in, ready for ⌘V
     }
 
     // If opening the app made it active, hand focus back to the previous app before typing into it

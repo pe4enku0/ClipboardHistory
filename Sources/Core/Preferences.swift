@@ -90,6 +90,13 @@ enum PanelPosition: String, CaseIterable, Identifiable {
     }
 }
 
+enum EditorChoice: String, CaseIterable, Identifiable {
+    case system, builtin
+
+    var id: String { rawValue }
+    var title: String { self == .system ? tr("Разметка macOS", "macOS Markup") : tr("Встроенный", "Built-in") }
+}
+
 enum PanelStyle: String, CaseIterable, Identifiable {
     case classic, glass
 
@@ -128,6 +135,7 @@ final class Preferences: ObservableObject {
     @Published var autoRecordings: Bool { didSet { UserDefaults.standard.set(autoRecordings, forKey: "autoRecordings") } }
     @Published var autoDownloads: Bool { didSet { UserDefaults.standard.set(autoDownloads, forKey: "autoDownloads") } }
     @Published var recognizeText: Bool { didSet { UserDefaults.standard.set(recognizeText, forKey: "recognizeText") } }
+    @Published var editor: EditorChoice { didSet { UserDefaults.standard.set(editor.rawValue, forKey: "editor") } }
     @Published var screenshotFeedback: Bool {
         didSet { UserDefaults.standard.set(screenshotFeedback, forKey: "screenshotFeedback") }
     }
@@ -147,6 +155,7 @@ final class Preferences: ObservableObject {
             "screenshotFeedback": true,
         ])
         screenshotFeedback = defaults.bool(forKey: "screenshotFeedback")
+        editor = EditorChoice(rawValue: defaults.string(forKey: "editor") ?? "") ?? .system
         language = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
         panelStyle = PanelStyle(rawValue: defaults.string(forKey: "panelStyle") ?? "") ?? .classic
         autoScreenshots = defaults.bool(forKey: "autoScreenshots")
