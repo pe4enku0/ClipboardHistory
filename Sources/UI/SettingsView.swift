@@ -99,6 +99,11 @@ struct AutoClipboardSettingsView: View {
                                     "No thumbnail in the corner: ⌘V works in a second instead of 5"))
                 }
                 .disabled(!prefs.autoScreenshots)
+                Toggle(isOn: $prefs.screenshotFeedback) {
+                    settingLabel(tr("Вспышка и превью", "Flash and preview"), "sparkles", .orange,
+                                 tr("Карточка в углу с кнопкой «Изменить»", "A card in the corner with an Edit button"))
+                }
+                .disabled(!prefs.autoScreenshots)
                 Toggle(isOn: $prefs.autoRecordings) {
                     settingLabel(tr("Записи экрана", "Screen recordings"), "record.circle", .red,
                                  tr("Видео из ⌘⇧5", "Videos from ⌘⇧5"))

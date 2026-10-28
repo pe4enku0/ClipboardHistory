@@ -10,7 +10,8 @@ enum Snapshots {
         let savedLanguage = prefs.language
         defer { prefs.language = savedLanguage }
         let store = sampleStore()
-        let noActions = PanelActions(paste: { _, _ in }, pasteText: { _ in }, insert: { _ in }, openSettings: {})
+        let noActions = PanelActions(paste: { _, _ in }, pasteText: { _ in }, insert: { _ in }, edit: { _ in },
+                                     openSettings: {})
 
         for language in [AppLanguage.ru, .en] {
             prefs.language = language
@@ -36,6 +37,23 @@ enum Snapshots {
                 save("settings-auto", settingsSize, AutoClipboardSettingsView(prefs: prefs))
                 save("settings-privacy", settingsSize, PrivacySettingsView(prefs: prefs, permissions: .shared))
                 save("settings-about", settingsSize, AboutSettingsView(prefs: prefs))
+
+                if let png = pngData(of: NSApp.applicationIconImage, pixels: 1024),
+                   let model = EditorModel(data: png, sourceURL: nil) {
+                    model.annotations = [
+                        Annotation(kind: .arrow(CGPoint(x: 120, y: 900), CGPoint(x: 330, y: 640)), color: .systemRed, width: 9),
+                        Annotation(kind: .rectangle(CGRect(x: 600, y: 240, width: 300, height: 200)), color: .systemYellow, width: 9),
+                        Annotation(kind: .blur(CGRect(x: 380, y: 330, width: 200, height: 120)), color: .black, width: 1),
+                        Annotation(kind: .text(tr("Важно!", "Important!"), CGPoint(x: 120, y: 120)), color: .systemRed, width: 60),
+                    ]
+                    save("editor", NSSize(width: 900, height: 640), EditorView(model: model, onDone: { _ in }))
+                    try? model.exportPNG()?.write(to: dir.appendingPathComponent("editor-export-\(language.rawValue)-\(theme).png"))
+                }
+                if let image = NSApp.applicationIconImage.thumbnailPNG(maxSide: 400).flatMap(NSImage.init(data:)) {
+                    save("toast", NSSize(width: 330, height: 90),
+                         ScreenshotToast(image: image, file: URL(fileURLWithPath: "/tmp/x.png"),
+                                         onEdit: {}, onClose: {}, onHover: { _ in }))
+                }
             }
         }
     }
@@ -54,6 +72,18 @@ enum Snapshots {
         host.cacheDisplay(in: host.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
         window.orderOut(nil)
+    }
+
+    // NSImage.size of an app icon is in points (often 128), so draw it into an exact pixel size
+    private static func pngData(of image: NSImage, pixels: Int) -> Data? {
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels))
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:])
     }
 
     // Never saved: items are only assigned in memory

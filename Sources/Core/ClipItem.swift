@@ -141,6 +141,18 @@ extension ClipItem {
         }.first
     }
 
+    // A picture the screenshot editor can open: copied image data, or a single image file
+    var editableImageData: Data? {
+        if kind == .image { return imageData }
+        guard let paths, paths.count == 1 else { return nil }
+        let url = URL(fileURLWithPath: paths[0])
+        return Self.isImageFile(url) ? try? Data(contentsOf: url) : nil
+    }
+
+    var canEdit: Bool {
+        kind == .image || (paths?.count == 1 && Self.isImageFile(URL(fileURLWithPath: paths![0])))
+    }
+
     var dimensions: String? {
         guard let imageWidth, let imageHeight else { return nil }
         return "\(imageWidth) × \(imageHeight)"

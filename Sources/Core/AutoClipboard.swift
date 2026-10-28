@@ -9,6 +9,7 @@ final class AutoClipboard {
     private let store: ClipStore
     private let monitor: ClipboardMonitor
     private var watchers: [DirectoryWatcher] = []
+    var onScreenshot: ((URL) -> Void)?
 
     init(store: ClipStore, monitor: ClipboardMonitor) {
         self.store = store
@@ -48,6 +49,7 @@ final class AutoClipboard {
         // Clipboard first, so ⌘V works immediately; the history entry (thumbnail, size) is built in the background
         Self.writeToPasteboard(file)
         monitor.markOwnChange()
+        if origin == .screenshot { onScreenshot?(file) }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let item = ClipItem(file: file, origin: origin) else { return }
             DispatchQueue.main.async { self?.store.add(item) }

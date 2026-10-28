@@ -73,6 +73,7 @@ struct PanelActions {
     let paste: (ClipItem, Bool) -> Void  // item, as plain text
     let pasteText: (String) -> Void
     let insert: (String) -> Void
+    let edit: (ClipItem) -> Void
     let openSettings: () -> Void
 }
 
@@ -294,7 +295,8 @@ struct ClipboardList: View {
                 hovering: state.hoveredID == item.id,
                 onPin: { store.togglePin(item) },
                 onDelete: { store.remove(item) },
-                onPasteText: item.ocrText.map { text in { actions.pasteText(text) } })
+                onPasteText: item.ocrText.map { text in { actions.pasteText(text) } },
+                onEdit: item.canEdit ? { actions.edit(item) } : nil)
             .id(item.id)
             .onHover { inside in
                 if inside {
@@ -311,6 +313,9 @@ struct ClipboardList: View {
                 }
                 if let ocr = item.ocrText {
                     Button(tr("Вставить текст с картинки", "Paste Text from Image")) { actions.pasteText(ocr) }
+                }
+                if item.canEdit {
+                    Button(tr("Изменить…", "Edit…")) { actions.edit(item) }
                 }
                 if let path = item.paths?.first {
                     Button(tr("Показать в Finder", "Show in Finder")) {
@@ -345,6 +350,7 @@ struct ClipRow: View {
     let onPin: () -> Void
     let onDelete: () -> Void
     let onPasteText: (() -> Void)?
+    let onEdit: (() -> Void)?
 
     var body: some View {
         let badge = item.badge
@@ -372,6 +378,10 @@ struct ClipRow: View {
                             .background(Capsule().fill(selected ? Color.white.opacity(0.22) : Color.primary.opacity(0.08)))
                     }
                     .help(tr("Вставить текст с картинки (⌥↵)", "Paste text from image (⌥↵)"))
+                }
+                if hovering, let onEdit {
+                    Button(action: onEdit) { Image(systemName: "pencil.tip.crop.circle") }
+                        .help(tr("Изменить (⌘E)", "Edit (⌘E)"))
                 }
                 if hovering {
                     Button(action: onPin) { Image(systemName: item.pinned ? "pin.slash" : "pin") }

@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     lazy var monitor = ClipboardMonitor(store: store)
     lazy var autoClipboard = AutoClipboard(store: store, monitor: monitor)
     let hotKey = HotKey()
+    let feedback = ScreenshotFeedback()
+    var editorWindow: NSWindow?
     // Where to paste when our own app had to be activated (e.g. opened from Finder)
     var previousApp: NSRunningApplication?
     var statusItem: NSStatusItem!
@@ -25,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let launchedAtLogin = Self.launchedAsLoginItem()
         store.applyLimits()
         monitor.start()
+        autoClipboard.onScreenshot = { [weak self] file in
+            if self?.prefs.screenshotFeedback == true { self?.feedback.show(file: file) }
+        }
+        feedback.onEdit = { [weak self] file in self?.openEditor(data: try? Data(contentsOf: file), sourceURL: file) }
         autoClipboard.restart()
         setupMainMenu()
         setupStatusItem()
@@ -210,6 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let actions = PanelActions(paste: { [weak self] in self?.paste($0, plainText: $1) },
                                    pasteText: { [weak self] in self?.pasteText($0) },
                                    insert: { [weak self] in self?.insert($0) },
+                                   edit: { [weak self] in self?.edit($0) },
                                    openSettings: { [weak self] in self?.showSettings() })
         panel.contentView = NSHostingView(rootView: PanelView(store: store, state: state, prefs: prefs, actions: actions))
         panel.setFrameOrigin(panelOrigin(size: panel.frame.size, position: centered ? .center : prefs.panelPosition))
@@ -306,6 +313,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
         case kVK_ANSI_P where cmd:
             if let selected { store.togglePin(selected) }
+        case kVK_ANSI_E where cmd:
+            if let selected, selected.canEdit { edit(selected) }
         default:
             guard cmd, let n = digitKeys.firstIndex(of: key) else { return false }
             if items.indices.contains(n) { paste(items[n], plainText: false) }
@@ -359,6 +368,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return
         }
         deliver { Keystrokes.type(value) }
+    }
+
+    func edit(_ item: ClipItem) {
+        openEditor(data: item.editableImageData, sourceURL: item.paths?.first.map { URL(fileURLWithPath: $0) })
+    }
+
+    func openEditor(data: Data?, sourceURL: URL?) {
+        guard let data, let model = EditorModel(data: data, sourceURL: sourceURL) else {
+            NSSound.beep()
+            return
+        }
+        hidePanel()
+        editorWindow?.close()
+        let window = ScreenshotEditor.makeWindow(model: model) { [weak self] png in
+            // Not marked as our own change, so the edited picture also lands in the history
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setData(png, forType: .png)
+            if let tiff = NSImage(data: png)?.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
+            self?.editorWindow?.close()
+            self?.editorWindow = nil
+            NSApp.hide(nil)  // back to the app you were in, ready for ⌘V
+        }
+        editorWindow = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     // If opening the app made it active, hand focus back to the previous app before typing into it

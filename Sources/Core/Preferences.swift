@@ -128,6 +128,9 @@ final class Preferences: ObservableObject {
     @Published var autoRecordings: Bool { didSet { UserDefaults.standard.set(autoRecordings, forKey: "autoRecordings") } }
     @Published var autoDownloads: Bool { didSet { UserDefaults.standard.set(autoDownloads, forKey: "autoDownloads") } }
     @Published var recognizeText: Bool { didSet { UserDefaults.standard.set(recognizeText, forKey: "recognizeText") } }
+    @Published var screenshotFeedback: Bool {
+        didSet { UserDefaults.standard.set(screenshotFeedback, forKey: "screenshotFeedback") }
+    }
     // A system screenshot setting, not stored by this app
     @Published var instantScreenshots = !AutoClipboard.showsFloatingThumbnail {
         didSet { AutoClipboard.showsFloatingThumbnail = !instantScreenshots }
@@ -141,7 +144,9 @@ final class Preferences: ObservableObject {
         defaults.register(defaults: [
             "historyLimit": 50, "retentionDays": 0, "saveImages": true, "panelPosition": PanelPosition.caret.rawValue,
             "autoScreenshots": true, "autoRecordings": true, "autoDownloads": true, "recognizeText": true,
+            "screenshotFeedback": true,
         ])
+        screenshotFeedback = defaults.bool(forKey: "screenshotFeedback")
         language = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
         panelStyle = PanelStyle(rawValue: defaults.string(forKey: "panelStyle") ?? "") ?? .classic
         autoScreenshots = defaults.bool(forKey: "autoScreenshots")
