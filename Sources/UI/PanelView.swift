@@ -158,8 +158,14 @@ struct PanelView: View {
             Divider().opacity(0.6)
             HStack(spacing: 14) {
                 if state.tab == .clipboard {
+                    let items = state.filterClips(store.items)
+                    let selected = items.indices.contains(state.selection) ? items[state.selection] : nil
                     KeyHint(key: "↵", label: tr("Вставить", "Paste"))
-                    KeyHint(key: "⇧↵", label: tr("Без форматирования", "Plain text"))
+                    if selected?.ocrText != nil {
+                        KeyHint(key: "⌥↵", label: tr("Текст с картинки", "Text from image"))
+                    } else {
+                        KeyHint(key: "⇧↵", label: tr("Без форматирования", "Plain text"))
+                    }
                     KeyHint(key: "⌘P", label: tr("Закрепить", "Pin"))
                 } else {
                     KeyHint(key: "↵", label: tr("Вставить", "Insert"))
@@ -287,7 +293,8 @@ struct ClipboardList: View {
         ClipRow(item: item, index: index, selected: index == state.selection,
                 hovering: state.hoveredID == item.id,
                 onPin: { store.togglePin(item) },
-                onDelete: { store.remove(item) })
+                onDelete: { store.remove(item) },
+                onPasteText: item.ocrText.map { text in { actions.pasteText(text) } })
             .id(item.id)
             .onHover { inside in
                 if inside {
@@ -337,6 +344,7 @@ struct ClipRow: View {
     let hovering: Bool
     let onPin: () -> Void
     let onDelete: () -> Void
+    let onPasteText: (() -> Void)?
 
     var body: some View {
         let badge = item.badge
@@ -354,6 +362,17 @@ struct ClipRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
+                if let onPasteText {
+                    // Always visible, so recognized text is easy to find
+                    Button(action: onPasteText) {
+                        Label(tr("Текст", "Text"), systemImage: "text.viewfinder")
+                            .font(.system(size: 11, weight: .medium))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(selected ? Color.white.opacity(0.22) : Color.primary.opacity(0.08)))
+                    }
+                    .help(tr("Вставить текст с картинки (⌥↵)", "Paste text from image (⌥↵)"))
+                }
                 if hovering {
                     Button(action: onPin) { Image(systemName: item.pinned ? "pin.slash" : "pin") }
                         .help(item.pinned ? tr("Открепить", "Unpin") : tr("Закрепить", "Pin"))

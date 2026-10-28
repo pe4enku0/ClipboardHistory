@@ -93,6 +93,12 @@ struct AutoClipboardSettingsView: View {
                     settingLabel(tr("Скриншоты", "Screenshots"), "camera.viewfinder", .indigo,
                                  tr("⌘⇧3, ⌘⇧4 и ⌘⇧5", "⌘⇧3, ⌘⇧4 and ⌘⇧5"))
                 }
+                Toggle(isOn: $prefs.instantScreenshots) {
+                    settingLabel(tr("Сохранять скриншот сразу", "Save screenshots instantly"), "bolt.fill", .yellow,
+                                 tr("Без миниатюры в углу: ⌘V работает через секунду, а не через 5",
+                                    "No thumbnail in the corner: ⌘V works in a second instead of 5"))
+                }
+                .disabled(!prefs.autoScreenshots)
                 Toggle(isOn: $prefs.autoRecordings) {
                     settingLabel(tr("Записи экрана", "Screen recordings"), "record.circle", .red,
                                  tr("Видео из ⌘⇧5", "Videos from ⌘⇧5"))

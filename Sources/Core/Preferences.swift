@@ -128,6 +128,10 @@ final class Preferences: ObservableObject {
     @Published var autoRecordings: Bool { didSet { UserDefaults.standard.set(autoRecordings, forKey: "autoRecordings") } }
     @Published var autoDownloads: Bool { didSet { UserDefaults.standard.set(autoDownloads, forKey: "autoDownloads") } }
     @Published var recognizeText: Bool { didSet { UserDefaults.standard.set(recognizeText, forKey: "recognizeText") } }
+    // A system screenshot setting, not stored by this app
+    @Published var instantScreenshots = !AutoClipboard.showsFloatingThumbnail {
+        didSet { AutoClipboard.showsFloatingThumbnail = !instantScreenshots }
+    }
     @Published var isRecordingShortcut = false
 
     var excludedBundleIDs: Set<String> { Set(excludedApps.map(\.bundleID)) }

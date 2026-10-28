@@ -56,6 +56,12 @@ final class AutoClipboard {
         getxattr(url.path, "com.apple.metadata:kMDItemIsScreenCapture", nil, 0, 0, 0) >= 0
     }
 
+    // The floating thumbnail in the corner delays saving the file by about 5 seconds
+    static var showsFloatingThumbnail: Bool {
+        get { UserDefaults(suiteName: "com.apple.screencapture")?.object(forKey: "show-thumbnail") as? Bool ?? true }
+        set { UserDefaults(suiteName: "com.apple.screencapture")?.set(newValue, forKey: "show-thumbnail") }
+    }
+
     private static func screenshotFolder() -> URL {
         if let custom = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location") {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath, isDirectory: true)
@@ -68,40 +74,56 @@ final class AutoClipboard {
 final class DirectoryWatcher {
     private let url: URL
     private let onNewFile: (URL) -> Void
-    private var known: Set<String>
-    private var source: DispatchSourceFileSystemObject?
+    private var stream: FSEventStreamRef?
+    private var seen: Set<String> = []
     private static let partialExtensions: Set<String> = ["crdownload", "download", "part", "partial", "tmp"]
 
+    // FSEvents reports each file as it appears; a plain directory vnode watch missed events and lagged
     init?(url: URL, onNewFile: @escaping (URL) -> Void) {
-        let fd = open(url.path, O_EVTONLY)
-        guard fd >= 0 else { return nil }
-        self.url = url
+        self.url = url.resolvingSymlinksInPath().standardizedFileURL
         self.onNewFile = onNewFile
-        known = Set((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? [])
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
-        source.setEventHandler { [weak self] in self?.scan() }
-        source.setCancelHandler { close(fd) }
-        source.resume()
-        self.source = source
+        var context = FSEventStreamContext(version: 0, info: nil, retain: nil, release: nil, copyDescription: nil)
+        context.info = Unmanaged.passUnretained(self).toOpaque()
+        let callback: FSEventStreamCallback = { _, info, count, paths, flags, _ in
+            guard let info else { return }
+            let watcher = Unmanaged<DirectoryWatcher>.fromOpaque(info).takeUnretainedValue()
+            let list = unsafeBitCast(paths, to: NSArray.self) as? [String] ?? []
+            for i in 0..<min(count, list.count) { watcher.handle(path: list[i], flags: flags[i]) }
+        }
+        let options = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes
+                                               | kFSEventStreamCreateFlagNoDefer)
+        guard let stream = FSEventStreamCreate(nil, callback, &context, [self.url.path] as CFArray,
+                                               FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.1, options) else {
+            return nil
+        }
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, .main)
+        FSEventStreamStart(stream)
     }
 
-    deinit { source?.cancel() }
+    deinit {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+    }
 
-    private func scan() {
-        let current = Set((try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? [])
-        let added = current.subtracting(known)
-        known = current
-        for name in added where !name.hasPrefix(".") && !name.hasPrefix("~") {
-            let file = url.appendingPathComponent(name)
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), !isDirectory.boolValue,
-                  !Self.partialExtensions.contains(file.pathExtension.lowercased()) else { continue }
-            waitUntilWritten(file, lastSize: -1, attempts: 120)
-        }
+    private func handle(path: String, flags: FSEventStreamEventFlags) {
+        let appeared = FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRenamed)
+        guard flags & appeared != 0, flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsFile) != 0 else { return }
+        let file = URL(fileURLWithPath: path)
+        let name = file.lastPathComponent
+        // Only files directly in the folder, not in its subfolders
+        guard file.deletingLastPathComponent().standardizedFileURL.path == url.path,
+              !name.hasPrefix("."), !name.hasPrefix("~"),
+              !Self.partialExtensions.contains(file.pathExtension.lowercased()),
+              FileManager.default.fileExists(atPath: path), !seen.contains(path) else { return }
+        seen.insert(path)
+        waitUntilWritten(file, lastSize: -1, attempts: 600)
     }
 
     private func waitUntilWritten(_ file: URL, lastSize: Int, attempts: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, attempts > 0,
                   let size = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? Int else { return }
             if size > 0 && size == lastSize {
