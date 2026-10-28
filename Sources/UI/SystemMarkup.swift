@@ -142,10 +142,18 @@ final class SystemMarkup: NSObject, NSSharingServiceDelegate {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
+    private static let temporaryDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("ClipboardHistory/Markup", isDirectory: true)
+
+    // Copies of history pictures shouldn't outlive the edit (one left behind by a cancelled edit goes at the next one)
+    static func removeTemporaryFiles() {
+        try? FileManager.default.removeItem(at: temporaryDirectory)
+    }
+
     // Pictures that only exist in the history get a temporary file to edit
     static func temporaryFile(for data: Data) -> URL? {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ClipboardHistory/Markup", isDirectory: true)
+        let dir = temporaryDirectory
+        removeTemporaryFiles()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(tr("Картинка", "Image") + " \(Int(Date().timeIntervalSince1970)).png")
         let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) ?? data

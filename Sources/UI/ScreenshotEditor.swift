@@ -83,7 +83,8 @@ final class EditorModel: ObservableObject {
         let input = CIImage(cgImage: image)
         let filter = CIFilter(name: "CIPixellate")
         filter?.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
-        filter?.setValue(max(CGFloat(image.width), CGFloat(image.height)) / 70, forKey: kCIInputScaleKey)
+        // Blocks at least 12 px wide, so text in small pictures can't be read back through the pixelation
+        filter?.setValue(max(max(CGFloat(image.width), CGFloat(image.height)) / 70, 12), forKey: kCIInputScaleKey)
         pixelated = filter?.outputImage.flatMap { CIContext().createCGImage($0, from: input.extent) }
     }
 
@@ -92,6 +93,9 @@ final class EditorModel: ObservableObject {
     var lineWidth: CGFloat { unit * [1.2, 2.2, 4][sizeIndex] }
     var fontSize: CGFloat { unit * [7, 10, 15][sizeIndex] }
     var canUndo: Bool { !annotations.isEmpty || textDraft != nil }
+    var hidesPrivateInfo: Bool {
+        annotations.contains { if case .blur = $0.kind { return true } else { return false } }
+    }
 
     func select(_ newTool: EditorTool) {
         commitText()

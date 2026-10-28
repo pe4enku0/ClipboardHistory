@@ -183,7 +183,8 @@ struct PrivacySettingsView: View {
             } header: {
                 Text(tr("Не сохранять из приложений", "Ignore these apps"))
             } footer: {
-                Text(tr("Пароли из менеджеров паролей не сохраняются никогда.", "Passwords from password managers are never saved."))
+                Text(tr("Пароли из менеджеров паролей, ключи API, токены и приватные ключи не сохраняются никогда. Другие пароли распознать нельзя — добавьте приложение, откуда копируете их, в этот список.",
+                        "Passwords from password managers, API keys, tokens and private keys are never saved. Other passwords can't be recognized, so add the app you copy them from to this list."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

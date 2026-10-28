@@ -1,28 +1,43 @@
 import AppKit
+import CryptoKit
 
 final class ClipStore: ObservableObject {
     @Published var items: [ClipItem] = []
     private let fileURL: URL
+    private let legacyURL: URL  // unencrypted history from earlier versions
+    private let key = HistoryKey.load()
     private let saveQueue = DispatchQueue(label: "ClipboardHistory.save")
 
     init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ClipboardHistory", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("history.plist")
-        if let data = try? Data(contentsOf: fileURL),
+        fileURL = dir.appendingPathComponent("history.sealed")
+        legacyURL = dir.appendingPathComponent("history.plist")
+        if let key, let sealed = try? Data(contentsOf: fileURL),
+           let data = try? AES.GCM.open(AES.GCM.SealedBox(combined: sealed), using: key),
            let saved = try? PropertyListDecoder().decode([ClipItem].self, from: data) {
             items = saved
+        } else if let data = try? Data(contentsOf: legacyURL),
+                  let saved = try? PropertyListDecoder().decode([ClipItem].self, from: data) {
+            items = saved
+            save()  // re-written encrypted; the plain file is removed once that succeeds
         }
     }
 
+    // Without the key (keychain access denied) history stays in memory only,
+    // so the file on disk is never replaced by something that can't be read back
     func save() {
+        guard let key else { return }
         let snapshot = items
-        let url = fileURL
+        let (url, legacy) = (fileURL, legacyURL)
         saveQueue.async {
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
-            if let data = try? encoder.encode(snapshot) { try? data.write(to: url, options: .atomic) }
+            guard let data = try? encoder.encode(snapshot),
+                  let sealed = try? AES.GCM.seal(data, using: key).combined,
+                  (try? sealed.write(to: url, options: .atomic)) != nil else { return }
+            try? FileManager.default.removeItem(at: legacy)
         }
     }
 
@@ -88,6 +103,36 @@ final class ClipStore: ObservableObject {
     }
 }
 
+// MARK: - Encryption key
+
+// History holds whatever was copied, so it is encrypted with a key that lives in the login keychain
+enum HistoryKey {
+    private static let base: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "io.github.pe4enku0.ClipboardHistory",
+        kSecAttrAccount as String: "history-key",
+    ]
+
+    static func load() -> SymmetricKey? {
+        var query = base
+        query[kSecReturnData as String] = true
+        var result: CFTypeRef?
+        switch SecItemCopyMatching(query as CFDictionary, &result) {
+        case errSecSuccess: return (result as? Data).map { SymmetricKey(data: $0) }
+        case errSecItemNotFound: return create()
+        default: return nil  // denied or locked: never replace a key that exists
+        }
+    }
+
+    private static func create() -> SymmetricKey? {
+        let key = SymmetricKey(size: .bits256)
+        var item = base
+        item[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
+        item[kSecAttrLabel as String] = "ClipboardHistory"
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess ? key : nil
+    }
+}
+
 // MARK: - Clipboard polling (macOS has no change notification)
 
 final class ClipboardMonitor {
@@ -123,7 +168,32 @@ final class ClipboardMonitor {
 
         guard let item = ClipItem(pasteboard: pb, source: source) else { return }
         if item.kind == .image && !prefs.saveImages { return }
+        if item.kind == .text && SecretDetector.containsSecret(item.text) { return }
         store.add(item)
+    }
+}
+
+// API keys, tokens and private keys copied from a terminal, browser or chat carry no password-manager marker
+enum SecretDetector {
+    private static let pattern = try? NSRegularExpression(pattern: [
+        #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#,
+        #"(?<![A-Za-z0-9_-])(?:"#
+            + [
+                #"sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}"#,          // Anthropic, OpenAI
+                #"gh[pousr]_[A-Za-z0-9]{30,}"#, #"github_pat_[A-Za-z0-9_]{40,}"#, #"glpat-[A-Za-z0-9_-]{20,}"#,
+                #"xox[abprs]-[A-Za-z0-9-]{10,}"#,                   // Slack
+                #"(?:AKIA|ASIA)[0-9A-Z]{16}"#,                      // AWS
+                #"AIza[0-9A-Za-z_-]{35}"#,                          // Google
+                #"(?:sk|rk)_live_[A-Za-z0-9]{20,}"#,                // Stripe
+                #"npm_[A-Za-z0-9]{36}"#,
+                #"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"#,  // JWT
+            ].joined(separator: "|")
+            + #")(?![A-Za-z0-9_-])"#,
+    ].joined(separator: "|"))
+
+    static func containsSecret(_ text: String) -> Bool {
+        let sample = String(text.prefix(200_000))
+        return pattern?.firstMatch(in: sample, range: NSRange(sample.startIndex..., in: sample)) != nil
     }
 }
 

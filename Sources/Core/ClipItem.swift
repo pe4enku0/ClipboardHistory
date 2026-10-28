@@ -167,8 +167,38 @@ extension ClipItem {
         if let string = pb.string(forType: .string) { return string }
         if let data = pb.data(forType: .rtf) { return NSAttributedString(rtf: data, documentAttributes: nil)?.string }
         if let data = pb.data(forType: .rtfd) { return NSAttributedString(rtfd: data, documentAttributes: nil)?.string }
-        if let data = pb.data(forType: .html) { return NSAttributedString(html: data, documentAttributes: nil)?.string }
+        if let data = pb.data(forType: .html) { return text(fromHTML: String(decoding: data, as: UTF8.self)) }
         return nil
+    }
+
+    // Not NSAttributedString(html:): that runs WebKit, which fetches remote images and styles the copied HTML points to
+    static func text(fromHTML html: String) -> String {
+        var s = html.replacingOccurrences(of: #"(?is)<(script|style|head)\b.*?</\1\s*>|<!--.*?-->"#, with: "",
+                                          options: .regularExpression)
+        s = s.replacingOccurrences(of: #"(?i)<br\s*/?>|</(p|div|li|tr|h[1-6])\s*>"#, with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
+        for (entity, char) in [("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'")] {
+            s = s.replacingOccurrences(of: entity, with: char)
+        }
+        s = decodeNumericEntities(s).replacingOccurrences(of: "&amp;", with: "&")
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let numericEntity = try? NSRegularExpression(pattern: #"&#(x[0-9a-fA-F]{1,6}|[0-9]{1,7});"#)
+
+    private static func decodeNumericEntities(_ s: String) -> String {
+        guard let numericEntity else { return s }
+        var result = ""
+        var last = s.startIndex
+        for match in numericEntity.matches(in: s, range: NSRange(s.startIndex..., in: s)) {
+            guard let whole = Range(match.range, in: s), let code = Range(match.range(at: 1), in: s) else { continue }
+            let digits = s[code]
+            let value = digits.hasPrefix("x") ? UInt32(digits.dropFirst(), radix: 16) : UInt32(digits)
+            result += s[last..<whole.lowerBound]
+            result += value.flatMap(Unicode.Scalar.init).map { String(Character($0)) } ?? String(s[whole])
+            last = whole.upperBound
+        }
+        return result + s[last...]
     }
 
     private static func size(of reps: [[String: Data]]) -> Int {

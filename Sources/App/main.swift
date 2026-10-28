@@ -31,7 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         autoClipboard.onScreenshot = { [weak self] file in
             if self?.prefs.screenshotFeedback == true { self?.feedback.show(file: file) }
         }
-        feedback.onEdit = { [weak self] file in self?.openEditor(data: try? Data(contentsOf: file), sourceURL: file) }
+        feedback.onEdit = { [weak self] file in
+            self?.openEditor(data: try? Data(contentsOf: file), sourceURL: file,
+                             original: self?.store.items.first { $0.paths == [file.path] })
+        }
+        SystemMarkup.removeTemporaryFiles()
         autoClipboard.restart()
         setupMainMenu()
         setupStatusItem()
@@ -372,16 +376,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func edit(_ item: ClipItem) {
-        openEditor(data: item.editableImageData, sourceURL: item.paths?.first.map { URL(fileURLWithPath: $0) })
+        openEditor(data: item.editableImageData, sourceURL: item.paths?.first.map { URL(fileURLWithPath: $0) },
+                   original: item)
     }
 
-    func openEditor(data: Data?, sourceURL: URL?) {
+    // `original` is the history entry being edited: it is dropped once the edit makes it obsolete,
+    // so a blurred-out password doesn't stay readable in the unedited copy
+    func openEditor(data: Data?, sourceURL: URL?, original: ClipItem? = nil) {
         guard let data else {
             NSSound.beep()
             return
         }
         hidePanel()
-        if prefs.editor == .system, openSystemMarkup(data: data, sourceURL: sourceURL) { return }
+        if prefs.editor == .system, openSystemMarkup(data: data, sourceURL: sourceURL, original: original) { return }
         guard let model = EditorModel(data: data, sourceURL: sourceURL) else {
             NSSound.beep()
             return
@@ -390,6 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let window = ScreenshotEditor.makeWindow(model: model) { [weak self] png in
             self?.editorWindow?.close()
             self?.editorWindow = nil
+            if model.hidesPrivateInfo, let original { self?.store.remove(original) }
             self?.copyEditedImage(png)
         }
         editorWindow = window
@@ -397,13 +405,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.makeKeyAndOrderFront(nil)
     }
 
-    private func openSystemMarkup(data: Data, sourceURL: URL?) -> Bool {
+    private func openSystemMarkup(data: Data, sourceURL: URL?, original: ClipItem?) -> Bool {
         // Screenshots are edited in place, as macOS does; anything else on a temporary copy
         let isScreenshot = sourceURL.map { FileManager.default.fileExists(atPath: $0.path) && AutoClipboard.isScreenCapture($0) } ?? false
         guard let file = isScreenshot ? sourceURL : SystemMarkup.temporaryFile(for: data) else { return false }
         return markup.open(file) { [weak self] edited in
             let png = NSBitmapImageRep(data: edited)?.representation(using: .png, properties: [:]) ?? edited
-            if isScreenshot, png != (try? Data(contentsOf: file)) { try? png.write(to: file) }
+            if isScreenshot {
+                if png != (try? Data(contentsOf: file)) { try? png.write(to: file) }
+                // The file itself was changed, so the old entry would only keep the unedited picture around
+                if let original { self?.store.remove(original) }
+            } else {
+                try? FileManager.default.removeItem(at: file)
+            }
             self?.copyEditedImage(png)
         }
     }
