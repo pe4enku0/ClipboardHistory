@@ -4,11 +4,24 @@ import SwiftUI
 enum PanelTab: Int, CaseIterable {
     case clipboard, emoji, kaomoji, symbols
 
-    var title: String { ["Буфер обмена", "Эмодзи", "Каомодзи", "Символы"][rawValue] }
-    var searchPrompt: String {
-        ["Поиск в истории", "Поиск по-английски: heart, cat, fire…", "Поиск",
-         "Поиск по-английски: arrow, euro, alpha…"][rawValue]
+    var title: String {
+        switch self {
+        case .clipboard: return tr("Буфер обмена", "Clipboard")
+        case .emoji: return tr("Эмодзи", "Emoji")
+        case .kaomoji: return tr("Каомодзи", "Kaomoji")
+        case .symbols: return tr("Символы", "Symbols")
+        }
     }
+
+    var searchPrompt: String {
+        switch self {
+        case .clipboard: return tr("Поиск в истории", "Search history")
+        case .emoji: return tr("Поиск по-английски: heart, cat…", "Search: heart, cat, fire…")
+        case .kaomoji: return tr("Поиск", "Search")
+        case .symbols: return tr("Поиск по-английски: arrow, euro…", "Search: arrow, euro, alpha…")
+        }
+    }
+
     var columns: Int { [1, 8, 2, 8][rawValue] }
 }
 
@@ -26,10 +39,14 @@ final class PanelState: ObservableObject {
     @Published var hoveredID: UUID?
     @Published var hoveredPick: Int?
 
+    // Pinned items come first, like a "Pinned" section in iOS lists
     func filterClips(_ items: [ClipItem]) -> [ClipItem] {
+        let ordered = items.filter(\.pinned) + items.filter { !$0.pinned }
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return items }
-        return items.filter { $0.text.localizedCaseInsensitiveContains(q) }
+        guard !q.isEmpty else { return ordered }
+        return ordered.filter {
+            $0.text.localizedCaseInsensitiveContains(q) || ($0.ocrText?.localizedCaseInsensitiveContains(q) ?? false)
+        }
     }
 
     func pickSections() -> [PickSection] {
@@ -42,9 +59,9 @@ final class PanelState: ObservableObject {
         let recent = Recents.list(for: tab)
         var sections: [PickSection] = []
         if !recent.isEmpty {
-            sections.append(PickSection(id: 0, title: "Недавние", start: 0, values: recent))
+            sections.append(PickSection(id: 0, title: tr("Недавние", "Recent"), start: 0, values: recent))
         }
-        sections.append(PickSection(id: 1, title: recent.isEmpty ? nil : "Все", start: recent.count,
+        sections.append(PickSection(id: 1, title: recent.isEmpty ? nil : tr("Все", "All"), start: recent.count,
                                     values: all.map(\.value)))
         return sections
     }
@@ -54,6 +71,7 @@ final class PanelState: ObservableObject {
 
 struct PanelActions {
     let paste: (ClipItem, Bool) -> Void  // item, as plain text
+    let pasteText: (String) -> Void
     let insert: (String) -> Void
     let openSettings: () -> Void
 }
@@ -67,99 +85,116 @@ struct PanelView: View {
     let actions: PanelActions
     @FocusState private var searchFocused: Bool
 
+    static let size = NSSize(width: 400, height: 520)
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                HStack(spacing: 2) {
-                    ForEach(PanelTab.allCases, id: \.self) { tab in
-                        let selected = state.tab == tab
-                        Button { state.tab = tab } label: {
-                            TabIcon(tab: tab)
-                                .foregroundStyle(selected ? Color.primary : Color.secondary)
-                                .frame(width: 40, height: 26)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(selected ? Color(nsColor: .controlBackgroundColor) : Color.clear)
-                                        .shadow(color: .black.opacity(selected ? 0.15 : 0), radius: 1, y: 0.5)
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(tab.title)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField(state.tab.searchPrompt, text: $state.query)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14))
+                        .focused($searchFocused)
+                    if !state.query.isEmpty {
+                        Button { state.query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(2)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.07)))
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.07)))
 
-                Spacer()
-                Button(action: actions.openSettings) { Image(systemName: "gearshape") }
-                    .buttonStyle(.borderless)
-                    .help("Настройки")
+                Button(action: actions.openSettings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help(tr("Настройки", "Settings"))
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
 
-            HStack {
-                Text(state.tab.title).font(.headline)
-                Spacer()
-                if state.tab == .clipboard {
-                    Button("Очистить всё") { store.clearUnpinned() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                        .disabled(store.items.allSatisfy(\.pinned))
+            Picker("", selection: $state.tab) {
+                ForEach(PanelTab.allCases, id: \.self) { tab in
+                    TabIcon(tab: tab).tag(tab)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
 
             if prefs.paused && state.tab == .clipboard {
-                HStack(spacing: 6) {
-                    Image(systemName: "pause.circle.fill")
-                    Text("Запись на паузе")
+                HStack(spacing: 8) {
+                    Image(systemName: "pause.circle.fill").foregroundStyle(.orange)
+                    Text(tr("Запись на паузе", "Recording is paused"))
                     Spacer()
-                    Button("Возобновить") { prefs.paused = false }
+                    Button(tr("Возобновить", "Resume")) { prefs.paused = false }
                         .buttonStyle(.borderless)
                 }
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.18)))
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
+                .font(.system(size: 12))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.orange.opacity(0.14)))
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
             }
-
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField(state.tab.searchPrompt, text: $state.query)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-            }
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
-            .padding(.horizontal, 10)
 
             Group {
                 if state.tab == .clipboard {
-                    ClipboardList(store: store, state: state, paste: actions.paste)
+                    ClipboardList(store: store, state: state, actions: actions)
                 } else {
                     PickerGrid(state: state, insert: actions.insert)
                 }
             }
             .frame(maxHeight: .infinity)
 
-            Divider()
-            Text(state.tab == .clipboard
-                 ? "↵ вставить · ⇧↵ без форматирования · ⌘P закрепить · ⌘⌫ удалить"
-                 : "Стрелки — выбор · ↵ вставить · ⇥ следующая вкладка")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(8)
+            Divider().opacity(0.6)
+            HStack(spacing: 14) {
+                if state.tab == .clipboard {
+                    KeyHint(key: "↵", label: tr("Вставить", "Paste"))
+                    KeyHint(key: "⇧↵", label: tr("Без форматирования", "Plain text"))
+                    KeyHint(key: "⌘P", label: tr("Закрепить", "Pin"))
+                } else {
+                    KeyHint(key: "↵", label: tr("Вставить", "Insert"))
+                    KeyHint(key: "⇥", label: tr("Следующая вкладка", "Next tab"))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
         }
-        .frame(width: 380, height: 500)
-        .background(VisualEffect())
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.12)))
+        .frame(width: Self.size.width, height: Self.size.height)
+        .modifier(PanelBackground(style: prefs.panelStyle))
         .onAppear { DispatchQueue.main.async { searchFocused = true } }
+    }
+}
+
+struct PanelBackground: ViewModifier {
+    let style: PanelStyle
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            if style == .glass {
+                content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            } else {
+                classic(content)
+            }
+        } else {
+            classic(content)
+        }
+    }
+
+    private func classic(_ content: Content) -> some View {
+        content
+            .background(VisualEffect())
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
     }
 }
 
@@ -170,9 +205,26 @@ struct TabIcon: View {
         switch tab {
         case .clipboard: Image(systemName: "list.clipboard")
         case .emoji: Image(systemName: "face.smiling")
-        case .kaomoji: Text(";-)").font(.system(size: 12, weight: .semibold))
-        case .symbols: Text("Ω").font(.system(size: 15, weight: .medium))
+        case .kaomoji: Text(";-)")
+        case .symbols: Text("Ω")
         }
+    }
+}
+
+struct KeyHint: View {
+    let key: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(key)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .padding(.horizontal, 5)
+                .frame(minWidth: 20, minHeight: 17)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.primary.opacity(0.1)))
+            Text(label).font(.system(size: 11))
+        }
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -181,50 +233,46 @@ struct TabIcon: View {
 struct ClipboardList: View {
     @ObservedObject var store: ClipStore
     @ObservedObject var state: PanelState
-    let paste: (ClipItem, Bool) -> Void
+    let actions: PanelActions
 
     var body: some View {
         let items = state.filterClips(store.items)
+        let firstRecent = items.firstIndex { !$0.pinned }
+        let hasPinned = items.first?.pinned == true
         if items.isEmpty {
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 Spacer()
-                Image(systemName: "clipboard").font(.largeTitle).foregroundStyle(.tertiary)
-                Text(store.items.isEmpty ? "Скопируйте что-нибудь —\nоно появится здесь" : "Ничего не найдено")
+                Image(systemName: store.items.isEmpty ? "doc.on.clipboard" : "magnifyingglass")
+                    .font(.system(size: 26, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .frame(width: 60, height: 60)
+                    .background(Circle().fill(Color.primary.opacity(0.07)))
+                Text(store.items.isEmpty ? tr("История пуста", "No history yet") : tr("Ничего не найдено", "No results"))
+                    .font(.system(size: 15, weight: .semibold))
+                Text(store.items.isEmpty
+                     ? tr("Скопируйте что-нибудь — оно появится здесь", "Copy something and it will show up here")
+                     : tr("Попробуйте другой запрос", "Try a different search"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
                 Spacer()
             }
             .frame(maxWidth: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            ClipRow(item: item, index: index, selected: index == state.selection,
-                                    hovering: state.hoveredID == item.id,
-                                    onPin: { store.togglePin(item) },
-                                    onDelete: { store.remove(item) })
-                                .id(item.id)
-                                .onHover { inside in
-                                    if inside {
-                                        state.hoveredID = item.id
-                                    } else if state.hoveredID == item.id {
-                                        state.hoveredID = nil
-                                    }
-                                }
-                                .onTapGesture { paste(item, false) }
-                                .contextMenu {
-                                    Button("Вставить") { paste(item, false) }
-                                    if item.kind != .image {
-                                        Button("Вставить как простой текст") { paste(item, true) }
-                                    }
-                                    Button(item.pinned ? "Открепить" : "Закрепить") { store.togglePin(item) }
-                                    Divider()
-                                    Button("Удалить") { store.remove(item) }
-                                }
+                            if index == 0 && hasPinned {
+                                SectionHeader(title: tr("Закреплённые", "Pinned"))
+                            }
+                            if index == firstRecent && hasPinned {
+                                SectionHeader(title: tr("Недавние", "Recent"))
+                            }
+                            row(item, index: index)
                         }
                     }
-                    .padding(10)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                 }
                 .onChange(of: state.selection) {
                     if items.indices.contains(state.selection) {
@@ -233,6 +281,52 @@ struct ClipboardList: View {
                 }
             }
         }
+    }
+
+    private func row(_ item: ClipItem, index: Int) -> some View {
+        ClipRow(item: item, index: index, selected: index == state.selection,
+                hovering: state.hoveredID == item.id,
+                onPin: { store.togglePin(item) },
+                onDelete: { store.remove(item) })
+            .id(item.id)
+            .onHover { inside in
+                if inside {
+                    state.hoveredID = item.id
+                } else if state.hoveredID == item.id {
+                    state.hoveredID = nil
+                }
+            }
+            .onTapGesture { actions.paste(item, false) }
+            .contextMenu {
+                Button(tr("Вставить", "Paste")) { actions.paste(item, false) }
+                if item.kind != .image {
+                    Button(tr("Вставить как простой текст", "Paste as Plain Text")) { actions.paste(item, true) }
+                }
+                if let ocr = item.ocrText {
+                    Button(tr("Вставить текст с картинки", "Paste Text from Image")) { actions.pasteText(ocr) }
+                }
+                if let path = item.paths?.first {
+                    Button(tr("Показать в Finder", "Show in Finder")) {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    }
+                }
+                Button(item.pinned ? tr("Открепить", "Unpin") : tr("Закрепить", "Pin")) { store.togglePin(item) }
+                Divider()
+                Button(tr("Удалить", "Delete")) { store.remove(item) }
+            }
+    }
+}
+
+struct SectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
     }
 }
 
@@ -246,95 +340,126 @@ struct ClipRow: View {
 
     var body: some View {
         let badge = item.badge
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Image(systemName: badge.symbol)
-                Text(badge.title)
-                Text("·")
-                Text(TimeLabel.string(for: item.date))
-                if let id = item.sourceBundleID, let icon = AppIcons.icon(bundleID: id) {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 13, height: 13)
-                        .help(item.sourceAppName ?? "")
-                }
-                Spacer(minLength: 4)
+        HStack(spacing: 10) {
+            RowLeading(item: item, badge: badge)
+
+            VStack(alignment: .leading, spacing: 2) {
+                title(badge)
+                    .foregroundStyle(selected ? Color.white : Color.primary)
+                Text(subtitle(badge))
+                    .font(.system(size: 11))
+                    .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 6) {
                 if hovering {
                     Button(action: onPin) { Image(systemName: item.pinned ? "pin.slash" : "pin") }
-                        .help(item.pinned ? "Открепить" : "Закрепить")
+                        .help(item.pinned ? tr("Открепить", "Unpin") : tr("Закрепить", "Pin"))
                     Button(action: onDelete) { Image(systemName: "trash") }
-                        .help("Удалить")
+                        .help(tr("Удалить", "Delete"))
                 } else {
-                    if item.pinned {
-                        Image(systemName: "pin.fill").foregroundStyle(Color.accentColor)
-                    }
+                    if item.pinned { Image(systemName: "pin.fill") }
                     if index < 9 {
-                        Text("⌘\(index + 1)").foregroundStyle(.tertiary)
+                        Text("⌘\(index + 1)").font(.system(size: 11, design: .rounded))
                     }
                 }
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
             .buttonStyle(.borderless)
-
-            preview(badge)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .font(.system(size: 12))
+            .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(selected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(hovering ? 0.09 : 0.045))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(selected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(selected ? Color.accentColor : Color.primary.opacity(hovering ? 0.07 : 0))
         )
         .contentShape(Rectangle())
     }
 
-    private var trimmed: String { item.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var oneLine: String {
+        item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: " ")
+    }
 
-    @ViewBuilder private func preview(_ badge: ContentBadge) -> some View {
+    @ViewBuilder private func title(_ badge: ContentBadge) -> some View {
         switch badge {
-        case .image:
-            if let data = item.thumbnail, let image = NSImage(data: data) {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .frame(maxWidth: 220, maxHeight: 100, alignment: .leading)
-            } else {
-                Text("Изображение").foregroundStyle(.secondary)
-            }
-        case .file:
-            HStack(spacing: 8) {
-                if let path = item.paths?.first {
+        case .code:
+            Text(oneLine).font(.system(size: 12, design: .monospaced)).lineLimit(2)
+        case .color:
+            Text(oneLine.uppercased()).font(.system(size: 13, design: .monospaced))
+        case .link:
+            Text(oneLine.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
+                .font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
+        case .image, .screenshot:
+            Text(badge.title).font(.system(size: 13, weight: .medium))
+        case .file, .recording, .download:
+            Text(item.text.components(separatedBy: "\n").joined(separator: ", "))
+                .font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
+        case .text:
+            Text(oneLine).font(.system(size: 13)).lineLimit(2)
+        }
+    }
+
+    private func subtitle(_ badge: ContentBadge) -> String {
+        var parts: [String] = []
+        if badge.isMedia {
+            if let dimensions = item.dimensions { parts.append(dimensions) }
+            if item.ocrText != nil { parts.append(tr("есть текст", "has text")) }
+        } else {
+            parts.append(badge.title)
+        }
+        if let app = item.sourceAppName, item.origin == nil { parts.append(app) }
+        parts.append(TimeLabel.string(for: item.date))
+        return parts.joined(separator: " · ")
+    }
+}
+
+// Thumbnail, color swatch or an iOS-style type tile, with the source app's icon in the corner
+struct RowLeading: View {
+    let item: ClipItem
+    let badge: ContentBadge
+
+    var body: some View {
+        let media = badge.isMedia || item.thumbnail != nil
+        ZStack(alignment: .bottomTrailing) {
+            Group {
+                if let data = item.thumbnail, let image = NSImage(data: data) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 56, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
+                } else if case .color(let color) = badge {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: color))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.15)))
+                        .frame(width: 32, height: 32)
+                } else if let path = item.paths?.first, item.kind == .files {
                     Image(nsImage: NSWorkspace.shared.icon(forFile: path))
                         .resizable()
-                        .frame(width: 28, height: 28)
+                        .frame(width: 32, height: 32)
+                } else {
+                    Image(systemName: badge.symbol)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(badge.tint.gradient))
                 }
-                Text(item.text).font(.system(size: 13)).lineLimit(3)
             }
-        case .color(let color):
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(nsColor: color))
-                    .frame(width: 28, height: 28)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.primary.opacity(0.15)))
-                Text(trimmed).font(.system(size: 13, design: .monospaced))
+            if let id = item.sourceBundleID, let icon = AppIcons.icon(bundleID: id) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 16, height: 16)
+                    .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+                    .offset(x: 4, y: 4)
+                    .help(item.sourceAppName ?? "")
             }
-        case .link:
-            Text(trimmed)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.accentColor)
-                .lineLimit(2)
-                .truncationMode(.middle)
-        case .code:
-            Text(trimmed).font(.system(size: 11.5, design: .monospaced)).lineLimit(5)
-        case .text:
-            Text(trimmed).font(.system(size: 13)).lineLimit(4)
         }
+        .frame(width: media ? 56 : 32, height: media ? 40 : 32)
     }
 }
 
@@ -347,34 +472,33 @@ struct PickerGrid: View {
     var body: some View {
         let sections = state.pickSections()
         let tab = state.tab
-        let fontSize: CGFloat = tab == .emoji ? 22 : tab == .symbols ? 18 : 13
+        let fontSize: CGFloat = tab == .emoji ? 24 : tab == .symbols ? 18 : 13
         if sections.allSatisfy({ $0.values.isEmpty }) {
             VStack {
                 Spacer()
-                Text("Ничего не найдено").foregroundStyle(.secondary)
+                Text(tr("Ничего не найдено", "No results")).foregroundStyle(.secondary)
                 Spacer()
             }
             .frame(maxWidth: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         ForEach(sections) { section in
-                            if let title = section.title {
-                                Text(title).font(.caption).foregroundStyle(.secondary).padding(.leading, 4)
-                            }
-                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: tab.columns),
-                                      spacing: 4) {
+                            if let title = section.title { SectionHeader(title: title) }
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: tab.columns),
+                                      spacing: 2) {
                                 ForEach(Array(section.values.enumerated()), id: \.offset) { offset, value in
                                     let index = section.start + offset
                                     Text(value)
                                         .font(.system(size: fontSize))
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.6)
-                                        .frame(maxWidth: .infinity, minHeight: tab == .kaomoji ? 32 : 38)
-                                        .background(RoundedRectangle(cornerRadius: 6).fill(
-                                            index == state.selection ? Color.accentColor.opacity(0.3)
-                                                : Color.primary.opacity(state.hoveredPick == index ? 0.09 : 0)))
+                                        .foregroundStyle(index == state.selection && tab != .emoji ? Color.white : Color.primary)
+                                        .frame(maxWidth: .infinity, minHeight: tab == .kaomoji ? 34 : 40)
+                                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(
+                                            index == state.selection ? Color.accentColor
+                                                : Color.primary.opacity(state.hoveredPick == index ? 0.08 : 0)))
                                         .contentShape(Rectangle())
                                         .id(index)
                                         .onHover { inside in
@@ -389,7 +513,8 @@ struct PickerGrid: View {
                             }
                         }
                     }
-                    .padding(10)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                 }
                 .onChange(of: state.selection) { proxy.scrollTo(state.selection) }
             }

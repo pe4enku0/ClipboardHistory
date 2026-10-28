@@ -30,11 +30,23 @@ final class ClipStore: ObservableObject {
         var item = new
         if let i = items.firstIndex(where: { $0.digest == item.digest }) {
             item.pinned = items[i].pinned
+            item.ocrText = item.ocrText ?? items[i].ocrText
             items.remove(at: i)
         }
         items.insert(item, at: 0)
         applyLimits()
         save()
+        recognizeTextIfNeeded(item)
+    }
+
+    private func recognizeTextIfNeeded(_ item: ClipItem) {
+        guard Preferences.shared.recognizeText, item.kind == .image, item.ocrText == nil,
+              let data = item.imageData else { return }
+        TextRecognizer.recognize(data) { [weak self] text in
+            guard let self, let text, let i = self.items.firstIndex(where: { $0.id == item.id }) else { return }
+            self.items[i].ocrText = text
+            self.save()
+        }
     }
 
     // Pinned items survive both limits, like on Windows

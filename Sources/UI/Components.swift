@@ -65,13 +65,14 @@ enum AppIcons {
 enum TimeLabel {
     private static let formatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "ru_RU")
         formatter.unitsStyle = .short
         return formatter
     }()
 
     static func string(for date: Date) -> String {
-        Date().timeIntervalSince(date) < 60 ? "только что" : formatter.localizedString(for: date, relativeTo: Date())
+        guard Date().timeIntervalSince(date) >= 60 else { return tr("только что", "just now") }
+        formatter.locale = L10n.locale
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
@@ -160,13 +161,13 @@ struct ShortcutRecorder: View {
     var body: some View {
         HStack(spacing: 8) {
             Button { model.toggle { prefs.hotKey = $0 } } label: {
-                Text(model.recording ? "Нажмите сочетание…" : prefs.hotKey.display)
+                Text(model.recording ? tr("Нажмите сочетание…", "Press shortcut…") : prefs.hotKey.display)
                     .frame(minWidth: 130)
                     .foregroundStyle(model.recording ? Color.accentColor : Color.primary)
             }
-            .help(model.recording ? "Esc — отмена" : "Нажмите, чтобы изменить")
+            .help(model.recording ? tr("Esc — отмена", "Esc to cancel") : tr("Нажмите, чтобы изменить", "Click to change"))
             if prefs.hotKey != .defaultCombo && !model.recording {
-                Button("Сбросить") { prefs.hotKey = .defaultCombo }
+                Button(tr("Сбросить", "Reset")) { prefs.hotKey = .defaultCombo }
                     .buttonStyle(.link)
             }
         }

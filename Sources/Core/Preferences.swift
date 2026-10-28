@@ -83,10 +83,21 @@ enum PanelPosition: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .caret: return "У текстового курсора"
-        case .mouse: return "У указателя мыши"
-        case .center: return "По центру экрана"
+        case .caret: return tr("У текстового курсора", "At the text cursor")
+        case .mouse: return tr("У указателя мыши", "At the mouse pointer")
+        case .center: return tr("По центру экрана", "Center of the screen")
         }
+    }
+}
+
+enum PanelStyle: String, CaseIterable, Identifiable {
+    case classic, glass
+
+    var id: String { rawValue }
+    var title: String { self == .classic ? tr("Классический", "Classic") : "Liquid Glass" }
+
+    static var glassAvailable: Bool {
+        if #available(macOS 26, *) { return true } else { return false }
     }
 }
 
@@ -111,6 +122,12 @@ final class Preferences: ObservableObject {
     @Published var excludedApps: [ExcludedApp] { didSet { Self.store(excludedApps, "excludedApps") } }
     @Published var onboardingDone: Bool { didSet { UserDefaults.standard.set(onboardingDone, forKey: "onboardingDone") } }
     @Published var launchAtLogin: Bool { didSet { updateLoginItem() } }
+    @Published var language: AppLanguage { didSet { UserDefaults.standard.set(language.rawValue, forKey: "language") } }
+    @Published var panelStyle: PanelStyle { didSet { UserDefaults.standard.set(panelStyle.rawValue, forKey: "panelStyle") } }
+    @Published var autoScreenshots: Bool { didSet { UserDefaults.standard.set(autoScreenshots, forKey: "autoScreenshots") } }
+    @Published var autoRecordings: Bool { didSet { UserDefaults.standard.set(autoRecordings, forKey: "autoRecordings") } }
+    @Published var autoDownloads: Bool { didSet { UserDefaults.standard.set(autoDownloads, forKey: "autoDownloads") } }
+    @Published var recognizeText: Bool { didSet { UserDefaults.standard.set(recognizeText, forKey: "recognizeText") } }
     @Published var isRecordingShortcut = false
 
     var excludedBundleIDs: Set<String> { Set(excludedApps.map(\.bundleID)) }
@@ -119,7 +136,14 @@ final class Preferences: ObservableObject {
         let defaults = UserDefaults.standard
         defaults.register(defaults: [
             "historyLimit": 50, "retentionDays": 0, "saveImages": true, "panelPosition": PanelPosition.caret.rawValue,
+            "autoScreenshots": true, "autoRecordings": true, "autoDownloads": true, "recognizeText": true,
         ])
+        language = AppLanguage(rawValue: defaults.string(forKey: "language") ?? "") ?? .system
+        panelStyle = PanelStyle(rawValue: defaults.string(forKey: "panelStyle") ?? "") ?? .classic
+        autoScreenshots = defaults.bool(forKey: "autoScreenshots")
+        autoRecordings = defaults.bool(forKey: "autoRecordings")
+        autoDownloads = defaults.bool(forKey: "autoDownloads")
+        recognizeText = defaults.bool(forKey: "recognizeText")
         hotKey = Self.load("hotKey") ?? .defaultCombo
         panelPosition = PanelPosition(rawValue: defaults.string(forKey: "panelPosition") ?? "") ?? .caret
         historyLimit = defaults.integer(forKey: "historyLimit")
@@ -142,7 +166,7 @@ final class Preferences: ObservableObject {
             }
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Не удалось изменить автозапуск"
+            alert.messageText = tr("Не удалось изменить автозапуск", "Couldn’t change the login item")
             alert.informativeText = error.localizedDescription
             alert.runModal()
             DispatchQueue.main.async { self.launchAtLogin = enabled }

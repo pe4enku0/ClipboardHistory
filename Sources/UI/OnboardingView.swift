@@ -16,9 +16,9 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             Group {
                 switch model.step {
-                case 0: WelcomeStep()
+                case 0: WelcomeStep(prefs: prefs)
                 case 1: HotKeyStep(prefs: prefs)
-                case 2: PermissionStep(permissions: permissions)
+                case 2: PermissionStep(prefs: prefs, permissions: permissions)
                 default: DoneStep(prefs: prefs)
                 }
             }
@@ -32,12 +32,20 @@ struct OnboardingView: View {
                             .frame(width: 7, height: 7)
                     }
                 }
+                if model.step == 0 {
+                    Picker("", selection: $prefs.language) {
+                        ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .padding(.leading, 12)
+                }
                 Spacer()
                 if model.step > 0 {
-                    Button("Назад") { model.step -= 1 }
+                    Button(tr("Назад", "Back")) { model.step -= 1 }
                         .controlSize(.large)
                 }
-                Button(model.step == lastStep ? "Начать" : "Далее") {
+                Button(model.step == lastStep ? tr("Начать", "Get Started") : tr("Далее", "Continue")) {
                     if model.step == lastStep { finish() } else { model.step += 1 }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -54,22 +62,27 @@ struct OnboardingView: View {
 }
 
 private struct WelcomeStep: View {
+    @ObservedObject var prefs: Preferences
+
     var body: some View {
         VStack(spacing: 12) {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 112, height: 112)
-            Text("История буфера").font(.system(size: 26, weight: .bold))
-            Text("Всё, что вы копируете, — всегда под рукой.\nКак Win+V в Windows, только для Mac.")
+            Text(tr("История буфера", "Clipboard History")).font(.system(size: 26, weight: .bold))
+            Text(tr("Всё, что вы копируете, — всегда под рукой.\nКак Win+V в Windows, только для Mac.",
+                    "Everything you copy, always at hand.\nLike Win+V on Windows, made for Mac."))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 14) {
-                FeatureRow(symbol: "doc.on.clipboard", title: "Вся история",
-                           text: "Текст, картинки, ссылки и файлы — с форматированием")
-                FeatureRow(symbol: "face.smiling", title: "Эмодзи и символы",
-                           text: "Эмодзи, каомодзи и спецсимволы в том же окне")
-                FeatureRow(symbol: "pin", title: "Закрепление",
-                           text: "Важное не потеряется и не удалится при очистке")
+                FeatureRow(symbol: "doc.on.clipboard", title: tr("Вся история", "Full history"),
+                           text: tr("Текст, картинки, ссылки и файлы — с форматированием",
+                                    "Text, images, links and files, formatting included"))
+                FeatureRow(symbol: "camera.viewfinder", title: tr("Скриншоты сразу в буфер", "Screenshots ready to paste"),
+                           text: tr("Сделали снимок — вставляйте через ⌘V", "Take a screenshot, then just press ⌘V"))
+                FeatureRow(symbol: "face.smiling", title: tr("Эмодзи и символы", "Emoji and symbols"),
+                           text: tr("Эмодзи, каомодзи и спецсимволы в том же окне",
+                                    "Emoji, kaomoji and special characters in the same window"))
             }
             .padding(.top, 14)
         }
@@ -81,14 +94,15 @@ private struct HotKeyStep: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Text("Одно сочетание клавиш").font(.title2.bold())
+            Text(tr("Одно сочетание клавиш", "One shortcut")).font(.title2.bold())
             KeyCaps(combo: prefs.hotKey)
-            Text("Нажмите его в любом приложении — окно с историей откроется рядом с курсором. Стрелками выберите запись и нажмите ↩.")
+            Text(tr("Нажмите его в любом приложении — окно с историей откроется рядом с курсором. Стрелками выберите запись и нажмите ↩.",
+                    "Press it in any app and your history opens next to the cursor. Pick an item with the arrow keys and press ↩."))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 400)
             HStack {
-                Text("Другое сочетание:").foregroundStyle(.secondary)
+                Text(tr("Другое сочетание:", "Use another:")).foregroundStyle(.secondary)
                 ShortcutRecorder(prefs: prefs)
             }
         }
@@ -96,6 +110,7 @@ private struct HotKeyStep: View {
 }
 
 private struct PermissionStep: View {
+    @ObservedObject var prefs: Preferences
     @ObservedObject var permissions: PermissionState
 
     var body: some View {
@@ -103,24 +118,27 @@ private struct PermissionStep: View {
             Image(systemName: permissions.accessibility ? "checkmark.seal.fill" : "hand.raised.fill")
                 .font(.system(size: 52))
                 .foregroundStyle(permissions.accessibility ? Color.green : Color.accentColor)
-            Text("Разрешите автовставку").font(.title2.bold())
-            Text("Чтобы выбранная запись сразу вставлялась в текст, включите приложение в «Системные настройки → Конфиденциальность и безопасность → Универсальный доступ».")
+            Text(tr("Разрешите автовставку", "Allow auto-paste")).font(.title2.bold())
+            Text(tr("Чтобы выбранная запись сразу вставлялась в текст, включите приложение в «Системные настройки → Конфиденциальность и безопасность → Универсальный доступ».",
+                    "To paste the chosen item right into your text, turn the app on in System Settings → Privacy & Security → Accessibility."))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 420)
             if permissions.accessibility {
-                Label("Доступ разрешён", systemImage: "checkmark.circle.fill")
+                Label(tr("Доступ разрешён", "Access granted"), systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else {
-                Button("Открыть настройки") { permissions.request() }
+                Button(tr("Открыть настройки", "Open System Settings")) { permissions.request() }
                     .controlSize(.large)
-                Text("Можно пропустить — тогда запись будет просто копироваться, а вставить её можно через ⌘V.")
+                Text(tr("Можно пропустить — тогда запись будет просто копироваться, а вставить её можно через ⌘V.",
+                        "You can skip this: items will just be copied, and you paste them with ⌘V."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 400)
             }
-            Label("История хранится только на этом Mac и никуда не отправляется.", systemImage: "lock.fill")
+            Label(tr("История хранится только на этом Mac и никуда не отправляется.",
+                     "Your history stays on this Mac and is never sent anywhere."), systemImage: "lock.fill")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)
@@ -136,18 +154,19 @@ private struct DoneStep: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 56))
                 .foregroundStyle(.green)
-            Text("Всё готово!").font(.title2.bold())
+            Text(tr("Всё готово!", "You’re all set!")).font(.title2.bold())
             HStack(spacing: 6) {
-                Text("Значок")
+                Text(tr("Значок", "The"))
                 Image(nsImage: MenuBarIcon.image(paused: false))
-                Text("живёт в строке меню вверху экрана.")
+                Text(tr("живёт в строке меню вверху экрана.", "icon lives in the menu bar at the top of the screen."))
             }
             .foregroundStyle(.secondary)
-            Text("Через него можно открыть настройки или поставить запись на паузу.")
+            Text(tr("Через него можно открыть настройки или поставить запись на паузу. А если нажать на само приложение, откроется история.",
+                    "Use it to open settings or pause recording. Opening the app itself shows your history."))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: 400)
-            Toggle("Запускать при входе в систему", isOn: $prefs.launchAtLogin)
+                .frame(maxWidth: 420)
+            Toggle(tr("Запускать при входе в систему", "Open at login"), isOn: $prefs.launchAtLogin)
                 .toggleStyle(.switch)
                 .padding(.top, 8)
         }

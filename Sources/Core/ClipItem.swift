@@ -1,8 +1,12 @@
 import AppKit
 import CryptoKit
+import SwiftUI
+import UniformTypeIdentifiers
 
 struct ClipItem: Codable, Identifiable {
     enum Kind: String, Codable { case text, image, files }
+    // Set when the app itself put a new file on the clipboard
+    enum Origin: String, Codable { case screenshot, recording, download }
 
     var id = UUID()
     var date = Date()
@@ -14,6 +18,10 @@ struct ClipItem: Codable, Identifiable {
     var digest: String        // detects duplicates
     var sourceBundleID: String?
     var sourceAppName: String?
+    var origin: Origin?
+    var ocrText: String?
+    var imageWidth: Int?
+    var imageHeight: Int?
     // Every type of every pasteboard item, so formatting, images and files paste back exactly
     var representations: [[String: Data]]
 }
@@ -24,6 +32,7 @@ extension ClipItem {
         NSPasteboard.PasteboardType.string, .rtf, .rtfd, .html, .png, .tiff, .fileURL, .URL, .pdf,
     ].map(\.rawValue))
     private static let maxBytes = 30_000_000
+    static let screenshotAppID = "com.apple.screenshot.launcher"
 
     init?(pasteboard pb: NSPasteboard, source: NSRunningApplication?) {
         guard let pbItems = pb.pasteboardItems, !pbItems.isEmpty else { return nil }
@@ -47,6 +56,11 @@ extension ClipItem {
             paths = filePaths
             text = fileURLs.map(\.lastPathComponent).joined(separator: "\n")
             digest = Self.hash(Data(("f" + filePaths.joined(separator: "\n")).utf8))
+            // A single picture gets a real preview instead of a generic file icon
+            if fileURLs.count == 1, Self.isImageFile(fileURLs[0]), let image = NSImage(contentsOf: fileURLs[0]) {
+                thumbnail = image.thumbnailPNG(maxSide: 360)
+                (imageWidth, imageHeight) = (image.pixelSize?.width, image.pixelSize?.height)
+            }
         } else if let string = Self.plainText(from: pb),
                   !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             kind = .text
@@ -56,6 +70,7 @@ extension ClipItem {
             kind = .image
             text = ""
             thumbnail = image.thumbnailPNG(maxSide: 360)
+            (imageWidth, imageHeight) = (image.pixelSize?.width, image.pixelSize?.height)
             digest = Self.hash(tiff)
         } else {
             return nil
@@ -63,6 +78,32 @@ extension ClipItem {
         sourceBundleID = source?.bundleIdentifier
         sourceAppName = source?.localizedName
         representations = reps
+    }
+
+    // A file that just appeared on disk: pasted as the file itself, and as a picture where that makes sense
+    init?(file url: URL, origin: Origin) {
+        var rep: [String: Data] = [NSPasteboard.PasteboardType.fileURL.rawValue: Data(url.absoluteString.utf8)]
+        var image: NSImage?
+        if Self.isImageFile(url), let loaded = NSImage(contentsOf: url) {
+            image = loaded
+            if url.pathExtension.lowercased() == "png", let data = try? Data(contentsOf: url) {
+                rep[NSPasteboard.PasteboardType.png.rawValue] = data
+            } else if let tiff = loaded.tiffRepresentation {
+                rep[NSPasteboard.PasteboardType.tiff.rawValue] = tiff
+            }
+        }
+        kind = origin == .screenshot && image != nil ? .image : .files
+        text = url.lastPathComponent
+        paths = [url.path]
+        thumbnail = image?.thumbnailPNG(maxSide: 360)
+        (imageWidth, imageHeight) = (image?.pixelSize?.width, image?.pixelSize?.height)
+        digest = Self.hash(Data(("f" + url.path).utf8))
+        if origin != .download {
+            sourceBundleID = Self.screenshotAppID
+            sourceAppName = tr("Снимок экрана", "Screenshot")
+        }
+        self.origin = origin
+        representations = [rep]
     }
 
     func write(to pb: NSPasteboard, plainText: Bool) {
@@ -80,11 +121,33 @@ extension ClipItem {
     }
 
     var badge: ContentBadge {
+        switch origin {
+        case .screenshot: return .screenshot
+        case .recording: return .recording
+        case .download: return .download
+        case nil: break
+        }
         switch kind {
         case .image: return .image
         case .files: return .file
         case .text: return ContentBadge.detect(text)
         }
+    }
+
+    // Full-size picture for text recognition
+    var imageData: Data? {
+        representations.lazy.compactMap {
+            $0[NSPasteboard.PasteboardType.png.rawValue] ?? $0[NSPasteboard.PasteboardType.tiff.rawValue]
+        }.first
+    }
+
+    var dimensions: String? {
+        guard let imageWidth, let imageHeight else { return nil }
+        return "\(imageWidth) × \(imageHeight)"
+    }
+
+    static func isImageFile(_ url: URL) -> Bool {
+        UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false
     }
 
     // Some apps put only rich text on the pasteboard
@@ -108,17 +171,20 @@ extension ClipItem {
 // MARK: - Content type shown on each row
 
 enum ContentBadge {
-    case text, link, image, file, code
+    case text, link, image, file, code, screenshot, recording, download
     case color(NSColor)
 
     var title: String {
         switch self {
-        case .text: return "Текст"
-        case .link: return "Ссылка"
-        case .image: return "Картинка"
-        case .file: return "Файл"
-        case .code: return "Код"
-        case .color: return "Цвет"
+        case .text: return tr("Текст", "Text")
+        case .link: return tr("Ссылка", "Link")
+        case .image: return tr("Картинка", "Image")
+        case .file: return tr("Файл", "File")
+        case .code: return tr("Код", "Code")
+        case .color: return tr("Цвет", "Color")
+        case .screenshot: return tr("Снимок экрана", "Screenshot")
+        case .recording: return tr("Запись экрана", "Screen recording")
+        case .download: return tr("Загрузка", "Download")
         }
     }
 
@@ -130,6 +196,31 @@ enum ContentBadge {
         case .file: return "doc"
         case .code: return "chevron.left.forwardslash.chevron.right"
         case .color: return "paintpalette"
+        case .screenshot: return "camera.viewfinder"
+        case .recording: return "record.circle"
+        case .download: return "arrow.down.circle"
+        }
+    }
+
+    // Tile colors in the spirit of iOS Settings icons
+    var tint: Color {
+        switch self {
+        case .text: return .gray
+        case .link: return .blue
+        case .image: return .teal
+        case .file: return .orange
+        case .code: return .purple
+        case .color: return .pink
+        case .screenshot: return .indigo
+        case .recording: return .red
+        case .download: return .green
+        }
+    }
+
+    var isMedia: Bool {
+        switch self {
+        case .image, .screenshot: return true
+        default: return false
         }
     }
 
@@ -180,5 +271,12 @@ extension NSImage {
         }
         guard let tiff = thumb.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
         return rep.representation(using: .png, properties: [:])
+    }
+
+    var pixelSize: (width: Int, height: Int)? {
+        if let rep = representations.first, rep.pixelsWide > 0, rep.pixelsHigh > 0 {
+            return (rep.pixelsWide, rep.pixelsHigh)
+        }
+        return size.width > 0 ? (Int(size.width), Int(size.height)) : nil
     }
 }
