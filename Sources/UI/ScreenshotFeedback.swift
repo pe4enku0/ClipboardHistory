@@ -89,7 +89,7 @@ final class ScreenshotFeedback {
                             backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.level = .statusBar
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -97,7 +97,8 @@ final class ScreenshotFeedback {
 
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
-        let target = NSRect(x: visible.maxX - size.width - 16, y: visible.minY + 16, width: size.width, height: size.height)
+        // The view's own 20pt shadow padding already keeps the card off the screen edges
+        let target = NSRect(x: visible.maxX - size.width, y: visible.minY, width: size.width, height: size.height)
         panel.setFrame(target.offsetBy(dx: 40, dy: 0), display: false)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -192,5 +193,7 @@ struct ScreenshotToast: View {
         .frame(width: 330)
         .modifier(PanelBackground(style: Preferences.shared.panelStyle))
         .onHover(perform: onHover)
+        .shadow(color: .black.opacity(0.25), radius: 14, y: 6)
+        .padding(20)  // room for the shadow; the window's own shadow would outline its square corners
     }
 }

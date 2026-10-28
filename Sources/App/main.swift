@@ -195,12 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func setupPanel() {
         // Non-activating panel: the app you were typing in stays active, so ⌘V lands there
-        panel = KeyPanel(contentRect: NSRect(origin: .zero, size: PanelView.size),
+        panel = KeyPanel(contentRect: NSRect(origin: .zero, size: PanelView.windowSize),
                          styleMask: [.nonactivatingPanel, .borderless],
                          backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false  // PanelView draws a shadow that follows its rounded corners
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
@@ -220,9 +220,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                                    edit: { [weak self] in self?.edit($0) },
                                    openSettings: { [weak self] in self?.showSettings() })
         panel.contentView = NSHostingView(rootView: PanelView(store: store, state: state, prefs: prefs, actions: actions))
-        panel.setFrameOrigin(panelOrigin(size: panel.frame.size, position: centered ? .center : prefs.panelPosition))
+        let origin = panelOrigin(size: PanelView.size, position: centered ? .center : prefs.panelPosition)
+        panel.setFrameOrigin(NSPoint(x: origin.x - PanelView.shadowMargin, y: origin.y - PanelView.shadowMargin))
         panel.makeKeyAndOrderFront(nil)
-        panel.invalidateShadow()
 
         if keyMonitor == nil {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in

@@ -20,10 +20,10 @@ enum Snapshots {
                     render(view, size: size, appearance: appearance,
                            to: dir.appendingPathComponent("\(file)-\(language.rawValue)-\(theme).png"))
                 }
-                save("panel", PanelView.size, PanelView(store: store, state: PanelState(), prefs: prefs, actions: noActions))
+                save("panel", PanelView.windowSize, PanelView(store: store, state: PanelState(), prefs: prefs, actions: noActions))
                 let emoji = PanelState()
                 emoji.tab = .emoji
-                save("panel-emoji", PanelView.size, PanelView(store: store, state: emoji, prefs: prefs, actions: noActions))
+                save("panel-emoji", PanelView.windowSize, PanelView(store: store, state: emoji, prefs: prefs, actions: noActions))
 
                 for step in 0...3 {
                     let model = OnboardingModel()
@@ -50,7 +50,7 @@ enum Snapshots {
                     try? model.exportPNG()?.write(to: dir.appendingPathComponent("editor-export-\(language.rawValue)-\(theme).png"))
                 }
                 if let image = NSApp.applicationIconImage.thumbnailPNG(maxSide: 400).flatMap(NSImage.init(data:)) {
-                    save("toast", NSSize(width: 330, height: 90),
+                    save("toast", NSSize(width: 370, height: 130),
                          ScreenshotToast(image: image, file: URL(fileURLWithPath: "/tmp/x.png"),
                                          onEdit: {}, onClose: {}, onHover: { _ in }))
                 }

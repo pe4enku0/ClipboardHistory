@@ -87,6 +87,9 @@ struct PanelView: View {
     @FocusState private var searchFocused: Bool
 
     static let size = NSSize(width: 400, height: 520)
+    // Room around the panel for its own shadow; the window's shadow would outline its square corners
+    static let shadowMargin: CGFloat = 32
+    static var windowSize: NSSize { NSSize(width: size.width + shadowMargin * 2, height: size.height + shadowMargin * 2) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -178,6 +181,8 @@ struct PanelView: View {
         }
         .frame(width: Self.size.width, height: Self.size.height)
         .modifier(PanelBackground(style: prefs.panelStyle))
+        .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+        .padding(Self.shadowMargin)
         .onAppear { DispatchQueue.main.async { searchFocused = true } }
     }
 }
